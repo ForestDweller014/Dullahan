@@ -1,0 +1,8 @@
+environment: local
+services:
+  cal:
+    host: 127.0.0.1
+    port: 8100
+  edl:
+    host: 127.0.0.1
+    port: 8200

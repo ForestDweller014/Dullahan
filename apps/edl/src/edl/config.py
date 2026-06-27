@@ -1,0 +1,33 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from pydantic import BaseModel, Field
+
+
+class EdlConfig(BaseModel):
+    repo_root: Path = Field(default_factory=lambda: Path.cwd())
+    experts_path: Path = Path("memory/graph/experts.yaml")
+    min_score_threshold: float = 0.0
+    max_dispatch_concurrency: int = Field(default=16, ge=1)
+    model_provider: str = "deterministic"
+    model_base_url: str = "http://127.0.0.1:30000/v1"
+    model_timeout_seconds: float = Field(default=30.0, gt=0)
+
+    @classmethod
+    def from_env(cls) -> EdlConfig:
+        repo_root = Path(os.getenv("DULLAHAN_REPO_ROOT", Path.cwd()))
+        return cls(
+            repo_root=repo_root,
+            max_dispatch_concurrency=int(os.getenv("EDL_MAX_DISPATCH_CONCURRENCY", "16")),
+            model_provider=os.getenv("EDL_MODEL_PROVIDER", "deterministic"),
+            model_base_url=os.getenv("EDL_MODEL_BASE_URL", "http://127.0.0.1:30000/v1"),
+            model_timeout_seconds=float(os.getenv("EDL_MODEL_TIMEOUT_SECONDS", "30")),
+        )
+
+    @property
+    def resolved_experts_path(self) -> Path:
+        if self.experts_path.is_absolute():
+            return self.experts_path
+        return self.repo_root / self.experts_path

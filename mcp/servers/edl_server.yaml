@@ -1,0 +1,7 @@
+id: dullahan-edl
+transport: stdio
+command: dullahan-mcp-edl
+tools:
+  - mcp/tools/send_to_edl.yaml
+environment:
+  EDL_BASE_URL: http://127.0.0.1:8200

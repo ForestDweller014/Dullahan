@@ -1,0 +1,5 @@
+parent_context_top_k: 8
+world_state_top_k: 12
+max_context_tokens: 12000
+dedupe_similarity_threshold: 0.92
+rerank: true

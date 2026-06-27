@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Dullahan
 
 Dullahan is an experimental app that orchestrates an agent swarm that performs
@@ -352,3 +353,6 @@ The current implementation is deliberately small and inspectable. It is not a
 finished production platform, but it establishes the core execution pattern:
 hierarchical agents, bounded context augmentation, expert dispatch, graph-backed
 memory, MCP tool surfaces, and filesystem-native traces.
+=======
+# Dullahan
+>>>>>>> 53cf0807edafa0d8a85373ee4bc708538c6023fa

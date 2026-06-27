@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Dullahan
 
 Dullahan is an experimental app that orchestrates an agent swarm that performs
@@ -118,13 +117,13 @@ dullahan-mcp-edl
 The fastest path runs the agent runtime, CAL, and EDL in one process:
 
 ```bash
-dullahan-agent "How should hierarchical execution use CAL and EDL?" --max-depth 1
+dullahan-agent "Assess whether a long volatility strategy is attractive before this week's major earnings releases" --max-depth 1
 ```
 
 Useful options:
 
 ```bash
-dullahan-agent "Map the responsibilities of CAL, EDL, and WorldStateDB" \
+dullahan-agent "Build a multi-factor trade thesis for rotating from mega-cap tech into regional banks" \
   --max-depth 2 \
   --max-breadth 3 \
   --max-total-instances 12 \
@@ -134,7 +133,7 @@ dullahan-agent "Map the responsibilities of CAL, EDL, and WorldStateDB" \
 For the full structured result:
 
 ```bash
-dullahan-agent "How does expert routing work?" --max-depth 1 --json
+dullahan-agent "Explain the key risks in a pairs trade between two semiconductor stocks" --max-depth 1 --json
 ```
 
 ### 3. Inspect Artifacts
@@ -233,7 +232,7 @@ docker compose up cal edl
 Then call them from the runtime over HTTP:
 
 ```bash
-dullahan-agent "How should CAL and EDL cooperate?" \
+dullahan-agent "Evaluate whether a steepener trade makes sense given inflation, growth, and Fed path assumptions" \
   --transport http \
   --cal-url http://127.0.0.1:8100 \
   --edl-url http://127.0.0.1:8200 \
@@ -404,11 +403,3 @@ Run the test suite:
 ```bash
 pytest
 ```
-
-The current implementation is deliberately small and inspectable. It is not a
-finished production platform, but it establishes the core execution pattern:
-hierarchical agents, bounded context augmentation, expert dispatch, graph-backed
-memory, MCP tool surfaces, and filesystem-native traces.
-=======
-# Dullahan
->>>>>>> 53cf0807edafa0d8a85373ee4bc708538c6023fa

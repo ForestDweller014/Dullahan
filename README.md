@@ -150,6 +150,8 @@ contexts.yaml
 responses.yaml
 trace.yaml
 manifest.yaml
+action_graph.json
+action_graph.mmd
 final_response.md
 ```
 
@@ -165,6 +167,60 @@ instances/<query_id>/summary.md
 This is the filesystem memory surface: you can inspect what each agent asked,
 what context CAL supplied, which expert EDL selected, and what the expert
 returned.
+
+### Exported Action / Inference Graph
+
+Every persisted run also exports the completed hierarchical action graph:
+
+| File | Purpose |
+| --- | --- |
+| `action_graph.json` | Machine-readable graph for downstream programs, graph databases, dashboards, notebooks, or web visualizers. |
+| `action_graph.mmd` | Mermaid flowchart for quick visualization in Markdown viewers, Mermaid Live, or Mermaid CLI. |
+
+The JSON graph uses this shape:
+
+```json
+{
+  "schema": "dullahan.action_graph.v1",
+  "trace_id": "trace:...",
+  "root_query_id": "query:...",
+  "nodes": [
+    {
+      "id": "query:...",
+      "label": "Short query label",
+      "depth": 1,
+      "sender_id": "query:parent",
+      "query": {},
+      "context": {},
+      "response": {},
+      "responses": []
+    }
+  ],
+  "edges": [
+    {
+      "id": "query__parent__to__query__child",
+      "source": "query:parent",
+      "target": "query:child",
+      "query": "The subquery text that created this edge",
+      "label": "Short edge label"
+    }
+  ]
+}
+```
+
+In other words, graph nodes are query instances with their `(query, context,
+response)` payloads, and graph edges are parent-to-child query delegations labeled
+by the child query. `response` contains the primary expert response when one
+exists, while `responses` preserves the full list. The JSON format is deliberately
+plain so it can be loaded by tools such as NetworkX, Cytoscape.js, D3, Graphistry,
+or a custom dashboard.
+
+To render the Mermaid graph with Mermaid CLI:
+
+```bash
+mmdc -i memory/executions/<trace_id>/action_graph.mmd \
+  -o memory/executions/<trace_id>/action_graph.svg
+```
 
 ## Run CAL And EDL As Services
 

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import yaml
@@ -33,12 +34,15 @@ def test_agent_runtime_persists_execution_artifacts() -> None:
     assert (artifact_dir / "responses.yaml").exists()
     assert (artifact_dir / "trace.yaml").exists()
     assert (artifact_dir / "manifest.yaml").exists()
+    assert (artifact_dir / "action_graph.json").exists()
+    assert (artifact_dir / "action_graph.mmd").exists()
     assert (artifact_dir / "final_response.md").exists()
 
     trace = yaml.safe_load((artifact_dir / "trace.yaml").read_text(encoding="utf-8"))
     queries = yaml.safe_load((artifact_dir / "queries.yaml").read_text(encoding="utf-8"))
     contexts = yaml.safe_load((artifact_dir / "contexts.yaml").read_text(encoding="utf-8"))
     manifest = yaml.safe_load((artifact_dir / "manifest.yaml").read_text(encoding="utf-8"))
+    action_graph = json.loads((artifact_dir / "action_graph.json").read_text(encoding="utf-8"))
 
     assert trace["trace_id"] == result.trace_id
     assert queries["root_query"]["query"] == result.root_query.query
@@ -47,6 +51,22 @@ def test_agent_runtime_persists_execution_artifacts() -> None:
     assert manifest["root_query_id"] == result.root_query.query_id
     assert manifest["instance_count"] == 2
     assert len(manifest["instances"]) == 2
+    assert action_graph["schema"] == "dullahan.action_graph.v1"
+    assert action_graph["root_query_id"] == result.root_query.query_id
+    assert len(action_graph["nodes"]) == 2
+    assert len(action_graph["edges"]) == 1
+    assert action_graph["edges"][0]["source"] == result.root_query.query_id
+    assert action_graph["edges"][0]["target"] == result.subqueries[0].query_id
+    assert action_graph["edges"][0]["query"] == result.subqueries[0].query
+
+    subquery_node = next(
+        node for node in action_graph["nodes"] if node["id"] == result.subqueries[0].query_id
+    )
+    assert subquery_node["query"]["query"] == result.subqueries[0].query
+    assert subquery_node["context"]["query_id"] == result.subqueries[0].query_id
+    assert subquery_node["response"]["query_id"] == result.subqueries[0].query_id
+    assert subquery_node["responses"][0]["query_id"] == result.subqueries[0].query_id
+    assert "flowchart TD" in (artifact_dir / "action_graph.mmd").read_text(encoding="utf-8")
 
     subquery_instance = next(
         instance

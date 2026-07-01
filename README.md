@@ -47,6 +47,17 @@ audited, replayed, or used for later distillation.
 | `memory/` | Seed graph, cluster docs, expert registry, execution artifacts, and local indexes. |
 | `configs/` | Runtime recursion, retrieval, routing, and local configuration. |
 
+## Tech Stack
+
+| Category | Tools |
+| --- | --- |
+| Runtime and services | Python, FastAPI, Uvicorn, REST APIs |
+| Agent integration | MCP stdio tools, OpenAI-compatible planner and expert model endpoints |
+| Context and retrieval | Graphify, graph-backed RAG, local WorldStateDB vector index, PostgreSQL + pgvector, deterministic embeddings |
+| Data and artifacts | JSON, YAML, Markdown, Mermaid |
+| Validation and schemas | Pydantic, pytest |
+| Local orchestration | Docker Compose, CLI entrypoints |
+
 ## Architecture
 
 ```mermaid
@@ -56,7 +67,7 @@ flowchart TD
     Planner --> Subqueries["Sibling subqueries"]
     Subqueries --> CAL["CAL: context augmentation"]
     CAL --> ParentContext["Parent context retrieval"]
-    CAL --> WorldStateDB["WorldStateDB over graph docs"]
+    CAL --> WorldStateDB["WorldStateDB over graph docs / pgvector"]
     CAL --> ContextBundle["Bounded ContextBundle"]
     ContextBundle --> EDL["EDL: expert dispatch"]
     EDL --> Router["Attention router"]
@@ -142,6 +153,21 @@ memory/documents/clusters/
 memory/world_state/indexes/local.json
 ```
 
+You can also pull source context from PostgreSQL before graphification. The SQL
+query should return `id`, `title`, `content`, and optionally `metadata` columns:
+
+```bash
+dullahan-graphify \
+  --postgres-dsn postgresql://dullahan:dullahan@127.0.0.1:5432/dullahan \
+  --postgres-query "select id, title, content, metadata from research_notes order by id" \
+  --k 8
+```
+
+That exports the pulled rows as Markdown under `memory/postgres_context/`, runs
+Graphify over that collection, converts the result into Dullahan graph memory,
+partitions the graph into K-bounded clusters, regenerates experts, and rebuilds
+WorldStateDB retrieval.
+
 Useful graphification options:
 
 ```bash
@@ -212,7 +238,9 @@ instances/<query_id>/summary.md
 
 This is the filesystem memory surface: you can inspect what each agent asked,
 what context CAL supplied, which expert EDL selected, and what the expert
-returned.
+returned. Each persisted `ContextBundle` also includes context optimization
+metadata such as candidate token count, selected token count, and estimated
+context reduction percentage for that subquery.
 
 ### Exported Action / Inference Graph
 
@@ -274,6 +302,17 @@ Start CAL and EDL with Docker Compose:
 
 ```bash
 docker compose up cal edl
+```
+
+To run CAL against PostgreSQL + pgvector instead of the local JSON index, start
+PostgreSQL and set `WORLD_STATE_BACKEND=postgres` for CAL:
+
+```bash
+docker compose up postgres
+
+WORLD_STATE_BACKEND=postgres \
+WORLD_STATE_POSTGRES_DSN=postgresql://dullahan:dullahan@127.0.0.1:5432/dullahan \
+dullahan-cal
 ```
 
 Then call them from the runtime over HTTP:
@@ -354,6 +393,11 @@ It performs the full pipeline:
 6. Rewrites `experts.yaml` so EDL can dispatch to one expert per cluster.
 7. Rebuilds the local WorldStateDB vector index used by CAL retrieval.
 
+For database-backed corpora, use `--postgres-dsn` and `--postgres-query` to pull
+context rows from PostgreSQL before Graphify runs. For database-backed retrieval,
+run CAL with `WORLD_STATE_BACKEND=postgres`; the PostgreSQL WorldStateDB creates
+a pgvector table and uses cosine-distance ordering for RAG retrieval.
+
 Lower-level cluster regeneration is still available when `graph.yaml` already
 exists and you only want to re-cluster it:
 
@@ -380,6 +424,9 @@ Common environment variables:
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `DULLAHAN_REPO_ROOT` | Repo root used by services inside containers or external processes. | Current working directory |
+| `WORLD_STATE_BACKEND` | `local` or `postgres` retrieval backend for CAL. | `local` |
+| `WORLD_STATE_POSTGRES_DSN` | PostgreSQL DSN used when `WORLD_STATE_BACKEND=postgres`. | unset |
+| `WORLD_STATE_POSTGRES_TABLE` | pgvector table used for WorldStateDB documents. | `world_state_documents` |
 | `EDL_MODEL_PROVIDER` | `deterministic` or `http`. | `deterministic` |
 | `EDL_MODEL_BASE_URL` | OpenAI-compatible model endpoint for expert execution. | `http://127.0.0.1:30000/v1` |
 | `EDL_MODEL_TIMEOUT_SECONDS` | Timeout for expert model calls. | `30` |
@@ -409,7 +456,7 @@ Dullahan is designed to scale across several axes:
 
 | Axis | Current mechanism | Scaling path |
 | --- | --- | --- |
-| Context volume | WorldStateDB indexes graph-backed Markdown documents locally. | Swap or shard vector storage, add graph-aware retrieval, or move indexes beside CAL workers. |
+| Context volume | WorldStateDB indexes graph-backed Markdown documents locally or in PostgreSQL + pgvector. | Shard pgvector tables, add graph-aware retrieval, or move indexes beside CAL workers. |
 | Expert count | One or more experts per cluster in `experts.yaml`. | Regenerate experts from larger graphs, split clusters by K, or specialize experts by domain and modality. |
 | Subquery fanout | Breadth, depth, total-instance, timeout, and sibling-concurrency limits. | Tune per workload, add queue-backed execution, or distribute CAL/EDL workers. |
 | Service deployment | Local process or HTTP CAL/EDL services. | Run CAL and EDL independently on Kubernetes, attach model-serving backends, and autoscale by request pressure. |

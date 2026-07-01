@@ -24,6 +24,7 @@ class ContextBundle(BaseModel):
     query_id: str
     documents: list[ContextDocument] = Field(default_factory=list)
     token_budget: int | None = Field(default=None, gt=0)
+    metadata: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
     @property
     def text(self) -> str:

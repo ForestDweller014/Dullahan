@@ -1,4 +1,15 @@
 services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: dullahan
+      POSTGRES_USER: dullahan
+      POSTGRES_PASSWORD: dullahan
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
   cal:
     build:
       context: .
@@ -7,6 +18,8 @@ services:
       DULLAHAN_REPO_ROOT: /app
       CAL_HOST: 0.0.0.0
       CAL_PORT: "8100"
+      WORLD_STATE_BACKEND: local
+      WORLD_STATE_POSTGRES_DSN: postgresql://dullahan:dullahan@postgres:5432/dullahan
     ports:
       - "8100:8100"
     volumes:
@@ -52,3 +65,6 @@ services:
     volumes:
       - ./memory:/app/memory
       - ./configs:/app/configs
+
+volumes:
+  postgres-data:

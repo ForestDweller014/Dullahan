@@ -84,7 +84,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run graphify and import its graph into Dullahan graph memory.",
     )
-    parser.add_argument("collection", type=Path, help="File or directory to pass to graphify.")
+    parser.add_argument(
+        "collection",
+        type=Path,
+        nargs="?",
+        help="File or directory to pass to graphify.",
+    )
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--graph-dir", type=Path, default=Path("memory/graph"))
     parser.add_argument("--documents-dir", type=Path, default=Path("memory/documents/nodes"))
@@ -96,6 +101,29 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Skip running graphify and import an existing graphify graph.json.",
+    )
+    parser.add_argument(
+        "--postgres-dsn",
+        default=None,
+        help="PostgreSQL DSN to pull source context before graphification.",
+    )
+    parser.add_argument(
+        "--postgres-query",
+        default=(
+            "SELECT id, title, content, metadata "
+            "FROM dullahan_context_documents "
+            "ORDER BY id"
+        ),
+        help=(
+            "SQL query used with --postgres-dsn. It should return id, title, content, "
+            "and optionally metadata columns."
+        ),
+    )
+    parser.add_argument(
+        "--postgres-export-dir",
+        type=Path,
+        default=Path("memory/postgres_context"),
+        help="Directory where pulled PostgreSQL rows are written before Graphify runs.",
     )
     return parser
 
@@ -110,8 +138,18 @@ def main(argv: list[str] | None = None) -> int:
         if args.graphify_output_dir is not None
         else None
     )
+    source_path = args.collection
+    if args.postgres_dsn is not None:
+        source_path = export_postgres_context(
+            dsn=args.postgres_dsn,
+            query=args.postgres_query,
+            export_dir=_resolve_under_repo(repo_root, args.postgres_export_dir),
+        )
+    if source_path is None and args.from_graphify_json is None:
+        raise SystemExit("collection is required unless --postgres-dsn or --from-graphify-json is set")
+
     config = GraphifyConfig(
-        source_path=args.collection,
+        source_path=source_path or repo_root,
         repo_root=repo_root,
         graph_dir=graph_dir,
         documents_dir=documents_dir,
@@ -130,6 +168,56 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"Graph memory: {graph_dir}")
     return 0
+
+
+def export_postgres_context(*, dsn: str, query: str, export_dir: Path) -> Path:
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+    except ImportError as exc:
+        raise RuntimeError(
+            "PostgreSQL graphification requires psycopg. "
+            "Install project dependencies with `python -m pip install -e \".[dev]\"`."
+        ) from exc
+
+    export_dir.mkdir(parents=True, exist_ok=True)
+    with psycopg.connect(dsn, row_factory=dict_row) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(query)
+            rows = cursor.fetchall()
+
+    for stale_file in export_dir.glob("*.md"):
+        stale_file.unlink()
+
+    for index, row in enumerate(rows):
+        document_id = str(row.get("id") or f"postgres-row-{index}")
+        title = str(row.get("title") or document_id)
+        content = str(row.get("content") or row.get("text") or "")
+        metadata = row.get("metadata") or {}
+        path = export_dir / f"{_slug(document_id)}.md"
+        path.write_text(
+            "\n".join(
+                [
+                    f"# {title}",
+                    "",
+                    f"- PostgreSQL ID: `{document_id}`",
+                    "",
+                    "## Metadata",
+                    "",
+                    "```json",
+                    json.dumps(metadata, indent=2, sort_keys=True, default=str),
+                    "```",
+                    "",
+                    "## Content",
+                    "",
+                    content,
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    return export_dir
 
 
 def _read_graphify_json(path: Path) -> dict[str, Any]:

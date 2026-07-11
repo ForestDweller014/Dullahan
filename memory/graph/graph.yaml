@@ -1,0 +1,110 @@
+nodes:
+  - id: concept:cal
+    type: concept
+    title: Context Augmentation Layer
+    document_paths:
+      - memory/documents/nodes/concept__cal.md
+    cluster_id: cluster:context_memory
+    metadata:
+      owner: system
+      version: 1
+
+  - id: concept:edl
+    type: concept
+    title: Expert Dispatch Layer
+    document_paths:
+      - memory/documents/nodes/concept__edl.md
+    cluster_id: cluster:expert_dispatch
+    metadata:
+      owner: system
+      version: 1
+
+  - id: concept:world_state_db
+    type: concept
+    title: WorldStateDB
+    document_paths:
+      - memory/documents/nodes/concept__world_state_db.md
+    cluster_id: cluster:context_memory
+    metadata:
+      owner: system
+      version: 1
+
+  - id: concept:agent_runtime
+    type: service
+    title: Agent Runtime
+    document_paths:
+      - memory/documents/nodes/concept__agent_runtime.md
+    cluster_id: cluster:agent_execution
+    metadata:
+      owner: system
+      version: 1
+
+  - id: concept:expert_pool
+    type: concept
+    title: Expert Pool
+    document_paths:
+      - memory/documents/nodes/concept__expert_pool.md
+    cluster_id: cluster:expert_dispatch
+    metadata:
+      owner: system
+      version: 1
+
+  - id: concept:knowledge_graph_memory
+    type: concept
+    title: Knowledge Graph Memory
+    document_paths:
+      - memory/documents/nodes/concept__knowledge_graph_memory.md
+    cluster_id: cluster:knowledge_graph
+    metadata:
+      owner: system
+      version: 1
+
+edges:
+  - source_id: concept:agent_runtime
+    target_id: concept:cal
+    type: connects_to
+    weight: 1.0
+    metadata:
+      relation: requests_context_for_subqueries
+
+  - source_id: concept:agent_runtime
+    target_id: concept:edl
+    type: connects_to
+    weight: 1.0
+    metadata:
+      relation: dispatches_contextualized_subqueries
+
+  - source_id: concept:cal
+    target_id: concept:world_state_db
+    type: references
+    weight: 1.0
+    metadata:
+      relation: retrieves_long_term_context
+
+  - source_id: concept:cal
+    target_id: concept:knowledge_graph_memory
+    type: references
+    weight: 0.8
+    metadata:
+      relation: resolves_node_and_cluster_documents
+
+  - source_id: concept:edl
+    target_id: concept:expert_pool
+    type: owns
+    weight: 1.0
+    metadata:
+      relation: selects_and_runs_experts
+
+  - source_id: concept:expert_pool
+    target_id: concept:knowledge_graph_memory
+    type: references
+    weight: 0.9
+    metadata:
+      relation: specializes_experts_by_cluster
+
+  - source_id: concept:agent_runtime
+    target_id: concept:expert_pool
+    type: semantically_related
+    weight: 0.75
+    metadata:
+      relation: experts_are_agent_instances

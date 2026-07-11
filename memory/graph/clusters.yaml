@@ -1,0 +1,38 @@
+clusters:
+  - id: cluster:context_memory
+    title: Context Memory
+    node_ids:
+      - concept:cal
+      - concept:world_state_db
+    document_paths:
+      - memory/documents/clusters/cluster__context_memory.md
+    metadata:
+      k_seed: 2
+
+  - id: cluster:expert_dispatch
+    title: Expert Dispatch
+    node_ids:
+      - concept:edl
+      - concept:expert_pool
+    document_paths:
+      - memory/documents/clusters/cluster__expert_dispatch.md
+    metadata:
+      k_seed: 2
+
+  - id: cluster:agent_execution
+    title: Agent Execution
+    node_ids:
+      - concept:agent_runtime
+    document_paths:
+      - memory/documents/clusters/cluster__agent_execution.md
+    metadata:
+      k_seed: 1
+
+  - id: cluster:knowledge_graph
+    title: Knowledge Graph Memory
+    node_ids:
+      - concept:knowledge_graph_memory
+    document_paths:
+      - memory/documents/clusters/cluster__knowledge_graph.md
+    metadata:
+      k_seed: 1

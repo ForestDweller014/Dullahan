@@ -1,0 +1,6 @@
+max_depth: 4
+max_breadth_per_agent: 6
+max_total_agent_instances: 128
+max_sibling_concurrency: 8
+timeout_seconds_per_instance: 60
+cycle_policy: reject_repeated_query_signature

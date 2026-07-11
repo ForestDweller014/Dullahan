@@ -1,0 +1,5 @@
+expert_selection:
+  strategy: attention_top_1
+  fallback: generalist
+  min_score_threshold: 0.35
+  allow_same_expert_parallel_instances: true

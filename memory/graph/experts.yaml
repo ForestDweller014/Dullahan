@@ -1,0 +1,32 @@
+experts:
+  - id: expert:context_memory
+    cluster_id: cluster:context_memory
+    role_context_path: memory/documents/clusters/cluster__context_memory.md
+    model: local-slm-context
+    max_concurrency: 8
+    metadata:
+      focus: cal_retrieval_and_context_packing
+
+  - id: expert:expert_dispatch
+    cluster_id: cluster:expert_dispatch
+    role_context_path: memory/documents/clusters/cluster__expert_dispatch.md
+    model: local-slm-dispatch
+    max_concurrency: 8
+    metadata:
+      focus: routing_attention_and_expert_selection
+
+  - id: expert:agent_execution
+    cluster_id: cluster:agent_execution
+    role_context_path: memory/documents/clusters/cluster__agent_execution.md
+    model: local-slm-runtime
+    max_concurrency: 16
+    metadata:
+      focus: recursive_agent_execution
+
+  - id: expert:knowledge_graph
+    cluster_id: cluster:knowledge_graph
+    role_context_path: memory/documents/clusters/cluster__knowledge_graph.md
+    model: local-slm-kg
+    max_concurrency: 4
+    metadata:
+      focus: graph_nodes_edges_clusters_and_documents

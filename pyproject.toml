@@ -5,6 +5,7 @@ description = "Hierarchical agent execution over knowledge graph context memory.
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.111,<1",
+  "graphifyy",
   "pydantic>=2.7,<3",
   "pyyaml>=6.0,<7",
   "uvicorn>=0.30,<1",
@@ -16,6 +17,7 @@ dullahan-cal = "cal.server:main"
 dullahan-edl = "edl.server:main"
 dullahan-mcp-cal = "dullahan_mcp.server_factories:cal_stdio_main"
 dullahan-mcp-edl = "dullahan_mcp.server_factories:edl_stdio_main"
+dullahan-graphify = "graph_builder.graphify:main"
 
 [project.optional-dependencies]
 dev = [

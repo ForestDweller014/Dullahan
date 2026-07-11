@@ -110,9 +110,56 @@ dullahan-cal
 dullahan-edl
 dullahan-mcp-cal
 dullahan-mcp-edl
+dullahan-graphify
 ```
 
-### 2. Run A Local In-Process Execution
+The `graphify` command used by `dullahan-graphify` is provided by the
+`graphifyy` package from `safishamsi/graphify`.
+
+### 2. Graphify A Data Collection
+
+Point the CLI at a file or directory collection to construct graph memory from
+that world state:
+
+```bash
+dullahan-graphify ./research/market-notes --k 8
+```
+
+`dullahan-graphify` invokes the real
+[`safishamsi/graphify`](https://github.com/safishamsi/graphify) CLI, imports its
+`graphify-out/graph.json`, converts that graph into Dullahan's YAML graph
+memory, partitions it into K-sized clusters, and regenerates the expert registry
+from those clusters.
+
+The generated memory lands in:
+
+```text
+memory/graph/graph.yaml
+memory/graph/clusters.yaml
+memory/graph/experts.yaml
+memory/documents/nodes/
+memory/documents/clusters/
+memory/world_state/indexes/local.json
+```
+
+Useful graphification options:
+
+```bash
+dullahan-graphify ./research/market-notes \
+  --k 6 \
+  --graphify-command graphify \
+  --graphify-output-dir ./graphify-out
+```
+
+If you already have a `graphify` output file, import it directly:
+
+```bash
+dullahan-graphify ./research/market-notes \
+  --from-graphify-json ./graphify-out/graph.json \
+  --k 6
+```
+
+### 3. Run A Local In-Process Execution
 
 The fastest path runs the agent runtime, CAL, and EDL in one process:
 
@@ -136,7 +183,7 @@ For the full structured result:
 dullahan-agent "Explain the key risks in a pairs trade between two semiconductor stocks" --max-depth 1 --json
 ```
 
-### 3. Inspect Artifacts
+### 4. Inspect Artifacts
 
 When `--persist-artifacts` is set, Dullahan writes a run folder under
 `memory/executions/<trace_id>/`.
@@ -289,24 +336,31 @@ mcp/tools/
 Set `CAL_BASE_URL` and `EDL_BASE_URL` to point the MCP servers at remote CAL/EDL
 instances.
 
-## Regenerate Graph Clusters And Experts
+## Graphify, Cluster, And Generate Experts
 
-Clusters are stored in `memory/graph/clusters.yaml`. Experts are stored in
-`memory/graph/experts.yaml`.
+The primary ingestion path is:
 
-Regenerate K-sized clusters and derive an expert pool from those clusters:
+```bash
+dullahan-graphify ./path/to/data --k 8
+```
+
+It performs the full pipeline:
+
+1. Runs `graphify` on a file or directory collection.
+2. Reads `graphify-out/graph.json`.
+3. Converts graphify nodes and edges into Dullahan `graph.yaml`.
+4. Writes Markdown node documents containing graphify metadata.
+5. Partitions the imported graph into clusters of size at most `K`.
+6. Rewrites `experts.yaml` so EDL can dispatch to one expert per cluster.
+7. Rebuilds the local WorldStateDB vector index used by CAL retrieval.
+
+Lower-level cluster regeneration is still available when `graph.yaml` already
+exists and you only want to re-cluster it:
 
 ```bash
 PYTHONPATH=apps/graph-builder/src:packages/kg/src:packages/shared/src \
   python scripts/build_graph_clusters.py --k 2 --write-experts
 ```
-
-When `--write-experts` is set, the graph builder:
-
-1. Partitions graph nodes into clusters of size at most `K`.
-2. Writes the new cluster layout.
-3. Creates missing cluster role-context Markdown documents.
-4. Rewrites `experts.yaml` so EDL can dispatch to one expert per cluster.
 
 ## Configuration
 

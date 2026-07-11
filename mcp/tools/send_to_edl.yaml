@@ -1,0 +1,38 @@
+name: send_to_EDL
+description: Dispatch a contextualized subquery to the highest-attention expert.
+input_schema:
+  type: object
+  required:
+    - sender_id
+    - query_id
+    - subquery
+    - context
+  properties:
+    sender_id:
+      type: string
+    query_id:
+      type: string
+    subquery:
+      type: string
+      minLength: 1
+    context:
+      type: object
+output_schema:
+  type: object
+  required:
+    - sender_id
+    - query_id
+    - subquery
+    - expert_id
+    - response
+  properties:
+    sender_id:
+      type: string
+    query_id:
+      type: string
+    subquery:
+      type: string
+    expert_id:
+      type: string
+    response:
+      type: string

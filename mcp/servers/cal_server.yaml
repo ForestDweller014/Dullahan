@@ -1,0 +1,7 @@
+id: dullahan-cal
+transport: stdio
+command: dullahan-mcp-cal
+tools:
+  - mcp/tools/send_to_cal.yaml
+environment:
+  CAL_BASE_URL: http://127.0.0.1:8100

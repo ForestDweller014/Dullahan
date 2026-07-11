@@ -406,6 +406,29 @@ PYTHONPATH=apps/graph-builder/src:packages/kg/src:packages/shared/src \
   python scripts/build_graph_clusters.py --k 2 --write-experts
 ```
 
+### Automatically Publish Graphify Updates
+
+The standard Graphify post-commit hook rebuilds `graphify-out/` but deliberately
+leaves its output unstaged. Dullahan adds an opt-in extension that commits the
+durable generated artifacts and pushes the current branch after a successful
+rebuild:
+
+```bash
+graphify hook install
+python scripts/install_graphify_auto_publish.py
+```
+
+The publisher creates a separate `chore: Refresh Graphify snapshot` commit, then
+uses a normal non-force `git push` to the branch's configured upstream. It never
+stages files outside `graphify-out/`, preserves unrelated staged work, and omits
+machine-local files such as `.graphify_python`, saved query memory, reflections,
+and timestamped backups. A detached HEAD, missing upstream, pre-staged Graphify
+files, rebuild failure, or push rejection stops publication and is recorded in
+`~/.cache/graphify-rebuild.log`.
+
+The extension is installed into `.git/hooks/post-commit`, which is local Git
+state. Re-run the installer after reinstalling or upgrading Graphify's hook.
+
 ## Configuration
 
 Recursion and execution limits live in `configs/recursion.yaml`:

@@ -45,6 +45,8 @@ def test_publish_commits_graph_outputs_without_user_work(tmp_path: Path) -> None
     graph_dir = repo / "graphify-out"
     (graph_dir / "graph.json").write_text('{"version": 2}\n', encoding="utf-8")
     (graph_dir / ".graphify_python").write_text("/local/python\n", encoding="utf-8")
+    (graph_dir / "cache").mkdir()
+    (graph_dir / "cache" / "stat-index.json").write_text("{}\n", encoding="utf-8")
     (repo / "source.py").write_text("VALUE = 2\n", encoding="utf-8")
     run(repo, "add", "source.py")
 
@@ -53,6 +55,7 @@ def test_publish_commits_graph_outputs_without_user_work(tmp_path: Path) -> None
     assert run(repo, "log", "-1", "--format=%s").stdout.strip() == COMMIT_SUBJECT
     assert run(repo, "diff", "--cached", "--name-only").stdout.strip() == "source.py"
     assert run(repo, "ls-files", "graphify-out/.graphify_python").stdout == ""
+    assert run(repo, "ls-files", "graphify-out/cache/stat-index.json").stdout == ""
 
     remote_graph = subprocess.run(
         ["git", f"--git-dir={remote}", "show", "main:graphify-out/graph.json"],

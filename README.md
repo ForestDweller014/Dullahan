@@ -422,9 +422,9 @@ The publisher creates a separate `chore: Refresh Graphify snapshot` commit, then
 uses a normal non-force `git push` to the branch's configured upstream. It never
 stages files outside `graphify-out/`, preserves unrelated staged work, and omits
 machine-local files such as `.graphify_python`, saved query memory, reflections,
-and timestamped backups. A detached HEAD, missing upstream, pre-staged Graphify
-files, rebuild failure, or push rejection stops publication and is recorded in
-`~/.cache/graphify-rebuild.log`.
+timestamped backups, and the mtime-based `cache/stat-index.json`. A detached
+HEAD, missing upstream, pre-staged Graphify files, rebuild failure, or push
+rejection stops publication and is recorded in `~/.cache/graphify-rebuild.log`.
 
 The extension is installed into `.git/hooks/post-commit`, which is local Git
 state. Re-run the installer after reinstalling or upgrading Graphify's hook.

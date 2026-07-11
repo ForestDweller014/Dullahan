@@ -25,7 +25,6 @@ NEW_GENERATED_PATHS = (
     "graphify-out/.graphify_labels.json.sig",
     "graphify-out/GRAPH_REPORT.md",
     "graphify-out/cache/ast",
-    "graphify-out/cache/stat-index.json",
     "graphify-out/cost.json",
     "graphify-out/graph.html",
     "graphify-out/graph.json",

@@ -12,3 +12,4 @@ memory/world_state/indexes/*
 !memory/world_state/indexes/.gitkeep
 memory/executions/*
 !memory/executions/.gitkeep
+graphify-out/cache/stat-index.json

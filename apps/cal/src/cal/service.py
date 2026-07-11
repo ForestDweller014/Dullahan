@@ -7,11 +7,11 @@ from cal.api.schemas import (
     BatchAugmentContextResponse,
 )
 from cal.config import CalConfig
-from cal.context.budget import pack_documents_to_budget
+from cal.context.budget import estimate_tokens, pack_documents_to_budget
 from cal.context.merge import merge_ranked_documents
 from dullahan_shared.retrieval.lexical import LexicalRetriever
 from dullahan_shared.schemas.context import ContextBundle
-from world_state import LocalWorldStateDB
+from world_state import LocalWorldStateDB, PostgresWorldStateDB
 
 
 class ContextAugmentationService:
@@ -32,11 +32,24 @@ class ContextAugmentationService:
 
     @classmethod
     def from_config(cls, config: CalConfig) -> ContextAugmentationService:
-        return cls(
-            world_state=LocalWorldStateDB.from_graph_memory(
+        if config.world_state_backend == "postgres":
+            if not config.postgres_dsn:
+                raise ValueError(
+                    "WORLD_STATE_POSTGRES_DSN is required when WORLD_STATE_BACKEND=postgres"
+                )
+            world_state = PostgresWorldStateDB.from_graph_memory(
+                dsn=config.postgres_dsn,
                 repo_root=config.repo_root,
                 graph_dir=config.resolved_graph_dir,
-            ),
+                table_name=config.postgres_table_name,
+            )
+        else:
+            world_state = LocalWorldStateDB.from_graph_memory(
+                repo_root=config.repo_root,
+                graph_dir=config.resolved_graph_dir,
+            )
+        return cls(
+            world_state=world_state,
             retriever=LexicalRetriever(),
             parent_top_k=config.parent_top_k,
             world_top_k=config.world_top_k,
@@ -59,12 +72,17 @@ class ContextAugmentationService:
             top_k=self.world_top_k,
         )
 
-        documents = pack_documents_to_budget(
-            merge_ranked_documents(
-                [(item.item, item.score) for item in parent_ranked]
-                + [(item.item, item.score) for item in world_ranked]
-            ),
-            token_budget=self.token_budget,
+        ranked_documents = [(item.item, item.score) for item in parent_ranked] + [
+            (item.item, item.score) for item in world_ranked
+        ]
+        merged_documents = merge_ranked_documents(ranked_documents)
+        documents = pack_documents_to_budget(merged_documents, token_budget=self.token_budget)
+        candidate_token_count = estimate_tokens(merged_documents)
+        selected_token_count = estimate_tokens(documents)
+        reduction_percent = (
+            round((1 - (selected_token_count / candidate_token_count)) * 100, 2)
+            if candidate_token_count > 0
+            else 0.0
         )
 
         return AugmentContextResponse(
@@ -73,6 +91,13 @@ class ContextAugmentationService:
                 query_id=request.query_id or request.parent_context.query_id,
                 documents=documents,
                 token_budget=self.token_budget,
+                metadata={
+                    "parent_candidate_count": len(parent_ranked),
+                    "world_candidate_count": len(world_ranked),
+                    "candidate_token_count": candidate_token_count,
+                    "selected_token_count": selected_token_count,
+                    "context_reduction_percent": reduction_percent,
+                },
             ),
         )
 

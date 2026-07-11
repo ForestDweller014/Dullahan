@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.111,<1",
   "graphifyy",
+  "psycopg[binary]>=3.2,<4",
   "pydantic>=2.7,<3",
   "pyyaml>=6.0,<7",
   "uvicorn>=0.30,<1",

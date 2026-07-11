@@ -52,6 +52,10 @@ def test_cal_merges_parent_and_graph_context() -> None:
     assert "world-node-doc:concept:cal" in document_ids
     assert response.context.query_id == "query:child"
     assert response.context.token_budget == 2048
+    assert response.context.metadata["candidate_token_count"] >= response.context.metadata[
+        "selected_token_count"
+    ]
+    assert "context_reduction_percent" in response.context.metadata
     assert estimate_tokens(response.context.documents) <= response.context.token_budget
 
 

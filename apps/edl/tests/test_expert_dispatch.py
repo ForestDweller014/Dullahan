@@ -1,0 +1,168 @@
+from pathlib import Path
+from threading import Lock
+from time import sleep
+
+from dullahan_shared.schemas.context import ContextBundle, ContextDocument, ContextSource
+from dullahan_shared.schemas.expert import ExpertResponse
+from edl.api.schemas import BatchDispatchRequest, DispatchRequest
+from edl.config import EdlConfig
+from edl.dispatch.attention_router import AttentionRouter
+from edl.dispatch.expert_registry import ExpertRegistry
+from edl.service import ExpertDispatchService
+
+
+ROOT = Path(__file__).resolve().parents[3]
+
+
+def build_service() -> ExpertDispatchService:
+    return ExpertDispatchService.from_config(EdlConfig(repo_root=ROOT))
+
+
+def test_expert_registry_loads_role_contexts() -> None:
+    experts = ExpertRegistry(
+        repo_root=ROOT,
+        experts_path=ROOT / "memory" / "graph" / "experts.yaml",
+    ).load()
+
+    assert {expert.id for expert in experts} >= {"expert:context_memory", "expert:expert_dispatch"}
+    assert all(expert.role_context for expert in experts)
+
+
+def test_edl_routes_context_query_to_context_memory_expert() -> None:
+    request = DispatchRequest(
+        sender_id="agent:root",
+        query_id="query:cal",
+        subquery="How should CAL retrieve world-state context and pack token budgets?",
+        context=ContextBundle(
+            query_id="query:cal",
+            documents=[
+                ContextDocument(
+                    id="doc:cal",
+                    source=ContextSource.GRAPH_NODE,
+                    text="CAL retrieves parent context and world-state context.",
+                )
+            ],
+        ),
+    )
+
+    response = build_service().dispatch(request).response
+
+    assert response.expert_id == "expert:context_memory"
+    assert response.sender_id == "agent:root"
+    assert response.cited_context_document_ids == ["doc:cal"]
+    assert response.routing_metadata["candidate_count"] >= 1
+    assert response.routing_metadata["route_probability"] == response.confidence
+    assert response.routing_metadata["attention_scoring"] == "embedding_cosine"
+    assert response.routing_metadata["model_provider"] == "deterministic-local-slm"
+    assert "local-slm-context" in response.response
+    assert not hasattr(response, "context")
+
+
+def test_edl_routes_dispatch_query_to_dispatch_expert() -> None:
+    request = DispatchRequest(
+        sender_id="agent:root",
+        query_id="query:edl",
+        subquery="How does attention routing select an expert from the expert pool?",
+        context=ContextBundle(query_id="query:edl", documents=[]),
+    )
+
+    response = build_service().dispatch(request).response
+
+    assert response.expert_id == "expert:expert_dispatch"
+    assert response.confidence is not None
+    assert response.routing_metadata["model"] == "local-slm-dispatch"
+
+
+def test_attention_router_returns_softmax_distribution() -> None:
+    experts = ExpertRegistry(
+        repo_root=ROOT,
+        experts_path=ROOT / "memory" / "graph" / "experts.yaml",
+    ).load()
+
+    route = AttentionRouter().select(
+        "How should EDL route to the expert pool?",
+        experts,
+    )
+
+    probabilities = [score.probability for score in route.distribution]
+
+    assert route.expert.id == "expert:expert_dispatch"
+    assert len(route.distribution) == len(experts)
+    assert abs(sum(probabilities) - 1.0) < 0.00001
+    assert route.probability == max(probabilities)
+
+
+def test_edl_batch_dispatch_returns_responses_in_request_order() -> None:
+    service = build_service()
+    request = BatchDispatchRequest(
+        requests=[
+            DispatchRequest(
+                sender_id="agent:root",
+                query_id="query:cal",
+                subquery="How should CAL retrieve context?",
+                context=ContextBundle(query_id="query:cal"),
+            ),
+            DispatchRequest(
+                sender_id="agent:root",
+                query_id="query:edl",
+                subquery="How should EDL select an expert?",
+                context=ContextBundle(query_id="query:edl"),
+            ),
+        ]
+    )
+
+    response = service.dispatch_batch(request)
+
+    assert [item.query_id for item in response.responses] == ["query:cal", "query:edl"]
+    assert len(response.responses) == 2
+
+
+def test_edl_batch_dispatch_runs_expert_instances_concurrently() -> None:
+    class MeasuringRunner:
+        def __init__(self) -> None:
+            self.active = 0
+            self.max_active = 0
+            self.lock = Lock()
+
+        def run(self, request, expert, route):
+            with self.lock:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            sleep(0.05)
+            with self.lock:
+                self.active -= 1
+            return ExpertResponse(
+                sender_id=request.sender_id,
+                query_id=request.query_id,
+                subquery=request.subquery,
+                expert_id=expert.id,
+                response="ok",
+                confidence=route.probability,
+            )
+
+    runner = MeasuringRunner()
+    service = ExpertDispatchService(
+        registry=ExpertRegistry(
+            repo_root=ROOT,
+            experts_path=ROOT / "memory" / "graph" / "experts.yaml",
+        ),
+        router=AttentionRouter(),
+        runner=runner,
+        max_dispatch_concurrency=3,
+    )
+    request = BatchDispatchRequest(
+        requests=[
+            DispatchRequest(
+                sender_id="agent:root",
+                query_id=f"query:{index}",
+                subquery=f"How should EDL route query {index}?",
+                context=ContextBundle(query_id=f"query:{index}"),
+            )
+            for index in range(3)
+        ]
+    )
+
+    response = service.dispatch_batch(request)
+
+    assert len(response.responses) == 3
+    assert runner.max_active > 1

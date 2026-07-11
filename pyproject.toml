@@ -25,7 +25,7 @@ dullahan-graphify = "graph_builder.graphify:main"
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.0,<9",
+  "pytest>=7.4,<8",
 ]
 
 [tool.setuptools.packages.find]

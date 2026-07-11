@@ -1,0 +1,54 @@
+services:
+  cal:
+    build:
+      context: .
+    command: ["dullahan-cal"]
+    environment:
+      DULLAHAN_REPO_ROOT: /app
+      CAL_HOST: 0.0.0.0
+      CAL_PORT: "8100"
+    ports:
+      - "8100:8100"
+    volumes:
+      - ./memory:/app/memory
+      - ./configs:/app/configs
+
+  edl:
+    build:
+      context: .
+    command: ["dullahan-edl"]
+    environment:
+      DULLAHAN_REPO_ROOT: /app
+      EDL_HOST: 0.0.0.0
+      EDL_PORT: "8200"
+      EDL_MODEL_PROVIDER: deterministic
+    ports:
+      - "8200:8200"
+    volumes:
+      - ./memory:/app/memory
+      - ./configs:/app/configs
+
+  agent:
+    build:
+      context: .
+    command:
+      - dullahan-agent
+      - How should CAL and EDL cooperate?
+      - --transport
+      - http
+      - --cal-url
+      - http://cal:8100
+      - --edl-url
+      - http://edl:8200
+      - --max-depth
+      - "1"
+    environment:
+      DULLAHAN_REPO_ROOT: /app
+    depends_on:
+      - cal
+      - edl
+    profiles:
+      - agent
+    volumes:
+      - ./memory:/app/memory
+      - ./configs:/app/configs

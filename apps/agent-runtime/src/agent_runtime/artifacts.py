@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import yaml
@@ -45,9 +46,67 @@ class ExecutionArtifactStore:
                 "spans": [span.model_dump(mode="json") for span in result.spans],
             },
         )
+        action_graph = self._build_action_graph(result)
+        self._write_json(run_dir / "action_graph.json", action_graph)
+        self._write_markdown(
+            run_dir / "action_graph.mmd",
+            "",
+            self._action_graph_mermaid(action_graph),
+            include_heading=False,
+        )
         self._write_query_instances(run_dir, result)
         self._write_markdown(run_dir / "final_response.md", "Final Response", result.final_response)
         return run_dir
+
+    def _build_action_graph(self, result: AgentRunResult) -> dict:
+        contexts_by_query_id = {context.query_id: context for context in result.contexts}
+        responses_by_query_id = {}
+        for response in result.expert_responses:
+            responses_by_query_id.setdefault(response.query_id, []).append(response)
+
+        queries = [result.root_query, *result.subqueries]
+        nodes = []
+        edges = []
+        for query in queries:
+            context = contexts_by_query_id.get(query.query_id)
+            responses = responses_by_query_id.get(query.query_id, [])
+            primary_response = responses[0] if responses else None
+            nodes.append(
+                {
+                    "id": query.query_id,
+                    "label": _short_label(query.query),
+                    "depth": query.depth,
+                    "sender_id": query.sender_id,
+                    "query": query.model_dump(mode="json"),
+                    "context": context.model_dump(mode="json") if context is not None else None,
+                    "response": (
+                        primary_response.model_dump(mode="json")
+                        if primary_response is not None
+                        else None
+                    ),
+                    "responses": [
+                        response.model_dump(mode="json") for response in responses
+                    ],
+                }
+            )
+            if query.query_id != result.root_query.query_id:
+                edges.append(
+                    {
+                        "id": f"{_safe_path_id(query.sender_id)}__to__{_safe_path_id(query.query_id)}",
+                        "source": query.sender_id,
+                        "target": query.query_id,
+                        "query": query.query,
+                        "label": _short_label(query.query),
+                    }
+                )
+
+        return {
+            "schema": "dullahan.action_graph.v1",
+            "trace_id": result.trace_id,
+            "root_query_id": result.root_query.query_id,
+            "nodes": nodes,
+            "edges": edges,
+        }
 
     def _write_query_instances(self, run_dir: Path, result: AgentRunResult) -> None:
         instances_dir = run_dir / "instances"
@@ -133,8 +192,33 @@ class ExecutionArtifactStore:
         with path.open("w", encoding="utf-8") as stream:
             yaml.safe_dump(data, stream, sort_keys=False)
 
-    def _write_markdown(self, path: Path, title: str, text: str) -> None:
-        path.write_text(f"# {title}\n\n{text}\n", encoding="utf-8")
+    def _write_json(self, path: Path, data: dict) -> None:
+        path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def _write_markdown(
+        self,
+        path: Path,
+        title: str,
+        text: str,
+        *,
+        include_heading: bool = True,
+    ) -> None:
+        if include_heading:
+            path.write_text(f"# {title}\n\n{text}\n", encoding="utf-8")
+        else:
+            path.write_text(f"{text}\n", encoding="utf-8")
+
+    def _action_graph_mermaid(self, graph: dict) -> str:
+        lines = ["flowchart TD"]
+        for node in graph["nodes"]:
+            label = _mermaid_label(f"{node['label']}\\n{node['id']}")
+            lines.append(f"    {_mermaid_id(node['id'])}[\"{label}\"]")
+        for edge in graph["edges"]:
+            label = _mermaid_label(edge["label"])
+            lines.append(
+                f"    {_mermaid_id(edge['source'])} -->|\"{label}\"| {_mermaid_id(edge['target'])}"
+            )
+        return "\n".join(lines)
 
     def _instance_summary(
         self,
@@ -167,3 +251,18 @@ class ExecutionArtifactStore:
 
 def _safe_path_id(value: str) -> str:
     return value.replace(":", "__").replace("/", "_")
+
+
+def _short_label(value: str, max_length: int = 72) -> str:
+    collapsed = " ".join(value.split())
+    if len(collapsed) <= max_length:
+        return collapsed
+    return collapsed[: max_length - 3] + "..."
+
+
+def _mermaid_id(value: str) -> str:
+    return "node_" + "".join(character if character.isalnum() else "_" for character in value)
+
+
+def _mermaid_label(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', "'")

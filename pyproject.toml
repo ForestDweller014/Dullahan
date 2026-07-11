@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "dullahan"
 version = "0.1.0"
@@ -22,6 +26,18 @@ dullahan-graphify = "graph_builder.graphify:main"
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0,<9",
+]
+
+[tool.setuptools.packages.find]
+where = [
+  "apps/cal/src",
+  "apps/edl/src",
+  "apps/agent-runtime/src",
+  "apps/mcp-servers/src",
+  "apps/graph-builder/src",
+  "packages/shared/src",
+  "packages/kg/src",
+  "packages/world-state/src",
 ]
 
 [tool.pytest.ini_options]

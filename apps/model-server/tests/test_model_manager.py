@@ -114,8 +114,17 @@ def test_lora_only_package_uses_named_base_and_stored_adapters(tmp_path: Path) -
     model_server.validate_model_package(package)
 
     assert model_server.launch_model_path(package, manifest) == "Qwen/Qwen3-8B"
-    assert model_server.lora_activation_args(package, manifest) == [
+    assert model_server.lora_activation_args(
+        package,
+        manifest,
+        max_loras=4,
+        max_cpu_loras=8,
+    ) == [
         "--enable-lora",
+        "--max-loras",
+        "4",
+        "--max-cpu-loras",
+        "8",
         "--lora-modules",
         f"legal={adapter.resolve()}",
     ]
@@ -177,7 +186,14 @@ def test_activation_command_loads_named_base_and_lora_adapters(
     command = captured["command"]
     assert command[0:3] == ["vllm", "serve", "Qwen/Qwen3-8B"]
     assert "--enable-lora" in command
+    assert command[command.index("--max-loras") + 1] == "4"
+    assert command[command.index("--max-cpu-loras") + 1] == "8"
     assert f"legal={adapter.resolve()}" in command
+
+
+def test_activation_rejects_invalid_lora_capacity() -> None:
+    with pytest.raises(ValueError, match="max_cpu_loras"):
+        model_server.ActivateRequest(max_loras=8, max_cpu_loras=4)
 
 
 def test_model_crud_metadata_and_lora_only_export_round_trip(

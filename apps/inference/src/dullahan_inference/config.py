@@ -128,6 +128,8 @@ class ModelServerConfig(BaseModel):
     model: str = "qwen-local"
     admin_token_env: str = "MODEL_ADMIN_TOKEN"
     export_mode: ModelExportMode = ModelExportMode.FULL
+    max_loras: int = Field(default=4, ge=1)
+    max_cpu_loras: int = Field(default=8, ge=1)
     activation_extra_args: list[str] = Field(default_factory=list)
     cpu: ModelServerEndpointConfig = Field(
         default_factory=lambda: ModelServerEndpointConfig(public_url="http://127.0.0.1:8001")
@@ -135,6 +137,12 @@ class ModelServerConfig(BaseModel):
     cuda: ModelServerEndpointConfig = Field(
         default_factory=lambda: ModelServerEndpointConfig(public_url="http://127.0.0.1:8002")
     )
+
+    @model_validator(mode="after")
+    def validate_lora_capacity(self) -> ModelServerConfig:
+        if self.max_cpu_loras < self.max_loras:
+            raise ValueError("model_server.max_cpu_loras must be >= max_loras")
+        return self
 
 
 class InferenceConfig(BaseModel):

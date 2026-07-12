@@ -16,6 +16,8 @@ services:
       MODEL_ADMIN_TOKEN: ${MODEL_ADMIN_TOKEN:?set MODEL_ADMIN_TOKEN}
       HF_TOKEN: ${HF_TOKEN:-}
       MODEL_EXPORT_MODE: ${MODEL_EXPORT_MODE:-full}
+      VLLM_MAX_LORAS: ${VLLM_MAX_LORAS:-4}
+      VLLM_MAX_CPU_LORAS: ${VLLM_MAX_CPU_LORAS:-8}
       DULLAHAN_BACKEND: cuda
       VLLM_EXTRA_ARGS: '["--device","cuda","--dtype","auto","--gpu-memory-utilization","0.90","--cpu-offload-gb","8","--swap-space","4"]'
       VLLM_STARTUP_TIMEOUT: "900"

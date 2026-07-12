@@ -20,6 +20,8 @@ def test_compose_variants_declare_matching_backends() -> None:
         service = next(iter(compose["services"].values()))
         assert service["environment"]["DULLAHAN_BACKEND"] == backend
         assert service["environment"]["MODEL_EXPORT_MODE"] == "${MODEL_EXPORT_MODE:-full}"
+        assert service["environment"]["VLLM_MAX_LORAS"] == "${VLLM_MAX_LORAS:-4}"
+        assert service["environment"]["VLLM_MAX_CPU_LORAS"] == "${VLLM_MAX_CPU_LORAS:-8}"
         assert service["build"]["dockerfile"] == f"Dockerfile.{backend}"
 
 

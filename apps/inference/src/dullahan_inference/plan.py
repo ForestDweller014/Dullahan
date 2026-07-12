@@ -35,6 +35,8 @@ class ResolvedInferencePlan(BaseModel):
     admin_base_url: str | None = None
     admin_token_env: str | None = None
     model_export_mode: str = "full"
+    max_loras: int = 4
+    max_cpu_loras: int = 8
     activation_extra_args: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 
@@ -294,6 +296,8 @@ def _model_server_plan(
         admin_base_url=endpoint.public_url,
         admin_token_env=config.model_server.admin_token_env,
         model_export_mode=config.model_server.export_mode.value,
+        max_loras=config.model_server.max_loras,
+        max_cpu_loras=config.model_server.max_cpu_loras,
         activation_extra_args=config.model_server.activation_extra_args,
         notes=[
             "The external model-server container owns hardware capacity checks and vLLM lifecycle.",

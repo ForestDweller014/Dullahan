@@ -54,7 +54,11 @@ def activate_model_server(plan: ResolvedInferencePlan) -> dict:
         plan,
         path,
         method="POST",
-        payload={"extra_args": plan.activation_extra_args},
+        payload={
+            "extra_args": plan.activation_extra_args,
+            "max_loras": plan.max_loras,
+            "max_cpu_loras": plan.max_cpu_loras,
+        },
     ) as response:
         return json.loads(response.read().decode("utf-8"))
 

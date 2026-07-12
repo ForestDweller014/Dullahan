@@ -68,6 +68,9 @@ model_server:
   admin_token_env: MODEL_ADMIN_TOKEN
   # full includes base weights and adapters; lora_only includes the named base reference + adapters.
   export_mode: full
+  # Distinct LoRA adapters that may share one vLLM batch and remain cached in host memory.
+  max_loras: 4
+  max_cpu_loras: 8
   activation_extra_args: []
   cpu:
     public_url: http://127.0.0.1:8001

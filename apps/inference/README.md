@@ -14,6 +14,12 @@ The Qwen provider requires a platform-appropriate vLLM installation. GGUF
 serving also requires `vllm-gguf-plugin`. The Ollama provider requires the
 `ollama` executable when `ollama.launch_server` is enabled.
 
+For model-server LoRA workloads, `model_server.max_loras` sets the number of
+distinct adapters that vLLM may place in one batch and `max_cpu_loras` sizes
+the host-memory adapter cache. The default `4`/`8` capacity supports concurrent
+adapter-backed agents without silently falling back to vLLM's single-LoRA
+batch default. Increase it only after measuring memory and queue behavior.
+
 ## Memory and offload policy
 
 Automatic selection uses a 4-bit GGUF model on CPU/Metal and a 4-bit GPTQ model

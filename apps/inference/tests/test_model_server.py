@@ -79,7 +79,11 @@ def test_model_server_activation_uses_admin_token(monkeypatch) -> None:
 
     assert captured["url"].endswith("/admin/models/expert/activate")
     assert captured["token"] == "secret"
-    assert captured["payload"] == {"extra_args": []}
+    assert captured["payload"] == {
+        "extra_args": [],
+        "max_loras": 4,
+        "max_cpu_loras": 8,
+    }
     assert result == {"active_model": "expert"}
 
 
@@ -142,3 +146,19 @@ def test_lora_only_export_mode_flows_from_config_to_request(
     assert destination.read_bytes() == b"package"
     assert captured["url"].endswith("/admin/models/expert/archive?mode=lora_only")
     assert plan.model_export_mode == "lora_only"
+
+
+def test_model_server_lora_capacity_flows_to_plan() -> None:
+    config = InferenceConfig(
+        model_server={"enabled": True, "max_loras": 6, "max_cpu_loras": 12}
+    )
+
+    plan = resolve_inference_plan(config, inventory=DeviceInventory(device="cpu"))
+
+    assert plan.max_loras == 6
+    assert plan.max_cpu_loras == 12
+
+
+def test_model_server_rejects_cpu_lora_cache_below_batch_capacity() -> None:
+    with pytest.raises(ValueError, match="max_cpu_loras"):
+        InferenceConfig(model_server={"max_loras": 8, "max_cpu_loras": 4})

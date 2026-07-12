@@ -89,6 +89,15 @@ Activation starts one base model and registers every stored adapter with vLLM;
 clients select the base model or an adapter through the OpenAI-compatible
 `model` request field.
 
+LoRA concurrency is explicit rather than relying on vLLM's single-adapter
+batch default. `model_server.max_loras` controls the number of distinct
+adapters allowed in one execution batch, while `max_cpu_loras` controls the
+host-memory adapter cache and must be at least as large. Defaults are `4` and
+`8`; the activation client sends them to the manager, and raw API callers use
+`VLLM_MAX_LORAS`/`VLLM_MAX_CPU_LORAS`. Larger values reserve more accelerator
+and host memory, so benchmark representative adapter ranks and swarm traffic
+before increasing them.
+
 A `lora_only` package contains only `dullahan-model.json` and `adapters/`. Its
 manifest must name the Hugging Face base model. At activation time vLLM resolves
 that base name (using `HF_TOKEN` when required) and loads the packaged adapters.

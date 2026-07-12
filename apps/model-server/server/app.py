@@ -21,7 +21,7 @@ import httpx
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from huggingface_hub import snapshot_download
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 MODEL_ROOT = Path(os.getenv("MODEL_ROOT", "/models")).resolve()
 VLLM_HOST = os.getenv("VLLM_HOST", "127.0.0.1")
@@ -85,8 +85,27 @@ class HFImport(BaseModel):
     adapter_name: str | None = None
 
 
+def positive_env(name: str, default: int) -> int:
+    value = int(os.getenv(name, str(default)))
+    if value < 1:
+        raise RuntimeError(f"{name} must be at least 1")
+    return value
+
+
+DEFAULT_MAX_LORAS = positive_env("VLLM_MAX_LORAS", 4)
+DEFAULT_MAX_CPU_LORAS = positive_env("VLLM_MAX_CPU_LORAS", 8)
+
+
 class ActivateRequest(BaseModel):
     extra_args: list[str] = Field(default_factory=list)
+    max_loras: int = Field(default=DEFAULT_MAX_LORAS, ge=1)
+    max_cpu_loras: int = Field(default=DEFAULT_MAX_CPU_LORAS, ge=1)
+
+    @model_validator(mode="after")
+    def validate_lora_capacity(self) -> ActivateRequest:
+        if self.max_cpu_loras < self.max_loras:
+            raise ValueError("max_cpu_loras must be >= max_loras")
+        return self
 
 
 BACKEND = Backend(BACKEND_NAME)
@@ -97,6 +116,8 @@ PROTECTED_ACTIVATION_FLAGS = {
     "--device",
     "--host",
     "--model",
+    "--max-cpu-loras",
+    "--max-loras",
     "--port",
     "--quantization",
     "--served-model-name",
@@ -267,7 +288,13 @@ def launch_model_path(path: Path, manifest: dict[str, Any]) -> Path | str:
     return candidates[0]
 
 
-def lora_activation_args(path: Path, manifest: dict[str, Any]) -> list[str]:
+def lora_activation_args(
+    path: Path,
+    manifest: dict[str, Any],
+    *,
+    max_loras: int,
+    max_cpu_loras: int,
+) -> list[str]:
     adapters = manifest.get("adapters") or lora_adapters(path)
     if not adapters:
         return []
@@ -277,7 +304,15 @@ def lora_activation_args(path: Path, manifest: dict[str, Any]) -> list[str]:
         if path.resolve() not in adapter_path.parents or not adapter_path.is_dir():
             raise HTTPException(status_code=400, detail="LoRA adapter path is invalid")
         modules.append(f"{checked_name(adapter['name'])}={adapter_path}")
-    return ["--enable-lora", "--lora-modules", *modules]
+    return [
+        "--enable-lora",
+        "--max-loras",
+        str(max_loras),
+        "--max-cpu-loras",
+        str(max_cpu_loras),
+        "--lora-modules",
+        *modules,
+    ]
 
 
 def validate_backend_compatibility(
@@ -653,7 +688,12 @@ async def activate_model(name: str, spec: ActivateRequest, request: Request) -> 
             "--port",
             str(VLLM_PORT),
             *EXTRA_ARGS,
-            *lora_activation_args(path, manifest),
+            *lora_activation_args(
+                path,
+                manifest,
+                max_loras=spec.max_loras,
+                max_cpu_loras=spec.max_cpu_loras,
+            ),
             *spec.extra_args,
         ]
         if manifest.get("quantization") == ModelQuantization.GGUF:

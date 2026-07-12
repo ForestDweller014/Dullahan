@@ -3,6 +3,7 @@ FROM ${CPU_BASE_IMAGE}
 
 USER root
 WORKDIR /opt/dullahan
+COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /licenses/dullahan/
 COPY server/requirements.txt /tmp/manager-requirements.txt
 RUN python -m pip install --no-cache-dir -r /tmp/manager-requirements.txt
 COPY server /opt/dullahan/server

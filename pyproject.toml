@@ -1,11 +1,14 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "dullahan"
 version = "0.1.0"
 description = "Hierarchical agent execution over knowledge graph context memory."
+authors = [{name = "Dullahan contributors"}]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"]
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.111,<1",
@@ -15,6 +18,10 @@ dependencies = [
   "pyyaml>=6.0,<7",
   "uvicorn>=0.30,<1",
 ]
+
+[project.urls]
+Repository = "https://github.com/ForestDweller014/Dullahan"
+Issues = "https://github.com/ForestDweller014/Dullahan/issues"
 
 [project.scripts]
 dullahan-agent = "agent_runtime.cli:main"

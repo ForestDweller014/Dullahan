@@ -597,3 +597,14 @@ Run the test suite:
 ```bash
 pytest
 ```
+
+## License
+
+Dullahan, including the inference module and model-server wrapper, is licensed
+under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution
+and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for runtime and model
+licensing boundaries.
+
+Model weights and LoRA adapters are separate artifacts and are not relicensed
+by Dullahan. Review the license attached to every configured or uploaded model
+before use or redistribution.

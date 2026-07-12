@@ -118,3 +118,10 @@ The schema preserves that requested policy, but the target vLLM runtime remains
 the final compatibility authority. In particular, vLLM 0.24.0's documented ARM
 CPU quantization matrix does not guarantee GGUF execution; the Linux ARM64 CPU
 image can still run supported unquantized or compressed-tensor checkpoints.
+
+## License
+
+The Dullahan model-server wrapper is licensed under Apache-2.0. Both wrapper
+images copy `LICENSE`, `NOTICE`, and `THIRD_PARTY_NOTICES.md` into
+`/licenses/dullahan/`. Upstream base images, installed packages, model weights,
+and LoRA adapters retain their own licenses.

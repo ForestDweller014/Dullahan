@@ -8,6 +8,8 @@ dist/
 build/
 *.egg-info/
 .env
+apps/model-server/.build/
+vllm_cpu/
 memory/world_state/indexes/*
 !memory/world_state/indexes/.gitkeep
 memory/executions/*

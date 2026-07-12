@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import yaml
@@ -26,4 +27,12 @@ class AgentRuntimeConfig(BaseModel):
             repo_root=repo_root,
             limits=ExecutionLimits.model_validate(data),
             max_sibling_concurrency=data.get("max_sibling_concurrency", 8),
+            planner_provider=os.getenv("AGENT_PLANNER_PROVIDER", "deterministic"),
+            planner_model=os.getenv("AGENT_PLANNER_MODEL", "local-planner"),
+            planner_base_url=os.getenv(
+                "AGENT_PLANNER_BASE_URL", "http://127.0.0.1:30000/v1"
+            ),
+            planner_timeout_seconds=float(
+                os.getenv("AGENT_PLANNER_TIMEOUT_SECONDS", "30")
+            ),
         )

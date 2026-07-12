@@ -40,6 +40,8 @@ audited, replayed, or used for later distillation.
 | `apps/cal` | Context Augmentation Layer. Merges parent context with WorldStateDB retrieval and enforces token budgets. |
 | `apps/edl` | Expert Dispatch Layer. Routes subqueries to experts with embedding attention and runs expert instances. |
 | `apps/graph-builder` | Builds K-sized graph clusters and can derive `experts.yaml` from those clusters. |
+| `apps/inference` | Resolves CPU/CUDA policy and serves Qwen through vLLM or an Ollama compatibility proxy. |
+| `apps/model-server` | Builds and runs the two persistent vLLM model-manager containers: Linux CPU and NVIDIA CUDA. |
 | `apps/mcp-servers` | Dependency-light stdio JSON-RPC MCP surfaces for `send_to_CAL` and `send_to_EDL`. |
 | `packages/kg` | Knowledge graph model, YAML graph storage, and K-partitioning. |
 | `packages/world-state` | Local persistent vector index over graph-backed Markdown documents. |
@@ -52,7 +54,7 @@ audited, replayed, or used for later distillation.
 | Category | Tools |
 | --- | --- |
 | Runtime and services | Python, FastAPI, Uvicorn, REST APIs |
-| Agent integration | MCP stdio tools, OpenAI-compatible planner and expert model endpoints |
+| Agent integration | MCP stdio tools, OpenAI-compatible planner, expert, vLLM, and Ollama endpoints |
 | Context and retrieval | Graphify, graph-backed RAG, local WorldStateDB vector index, PostgreSQL + pgvector, deterministic embeddings |
 | Data and artifacts | JSON, YAML, Markdown, Mermaid |
 | Validation and schemas | Pydantic, pytest |
@@ -72,7 +74,8 @@ flowchart TD
     ContextBundle --> EDL["EDL: expert dispatch"]
     EDL --> Router["Attention router"]
     Router --> Experts["Cluster-specialized SLM experts"]
-    Experts --> Runtime
+    Experts --> Inference["Local inference: Qwen/vLLM or Ollama"]
+    Inference --> Runtime
     Runtime --> Artifacts["YAML + Markdown execution artifacts"]
 ```
 
@@ -119,6 +122,8 @@ This installs the CLI entrypoints:
 dullahan-agent
 dullahan-cal
 dullahan-edl
+dullahan-inference
+dullahan-benchmark-gguf
 dullahan-mcp-cal
 dullahan-mcp-edl
 dullahan-graphify
@@ -185,7 +190,71 @@ dullahan-graphify ./research/market-notes \
   --k 6
 ```
 
-### 3. Run A Local In-Process Execution
+### 3. Start Local Inference
+
+Inspect the automatically resolved device, quantization, model, offload, and
+launch command without loading model weights:
+
+```bash
+dullahan-inference plan
+```
+
+The default [`configs/inference.yaml`](configs/inference.yaml) selects CUDA when
+available and CPU otherwise. Automatic quantization selects GPTQ on CUDA and
+GGUF on CPU. Set `device` to `cpu` or `cuda`, and `quantization` to `gptq`,
+`gguf`, `awq`, or `none`, to override either decision. All default Qwen
+checkpoints are between 7B and 9B parameters.
+
+For direct Qwen hosting, install the appropriate vLLM build for the machine and
+start its OpenAI-compatible server:
+
+```bash
+# GGUF additionally requires: uv pip install vllm-gguf-plugin
+dullahan-inference serve
+```
+
+CPU and CUDA vLLM packages have different installation requirements; follow
+the [official CPU installation guide](https://docs.vllm.ai/en/stable/getting_started/installation/cpu/)
+or the matching CUDA installation guide. vLLM currently describes GGUF support
+as experimental and provides it through `vllm-gguf-plugin`.
+
+To use Ollama instead, set `provider: ollama` and choose the desired Qwen model
+tag under `ollama.model`. The proxy uses Ollama's non-streaming
+[`/api/generate`](https://docs.ollama.com/api/generate) API while exposing the
+OpenAI-compatible `/v1/completions` contract expected by Dullahan. Set
+`ollama.launch_server: true` if Dullahan should start `ollama serve` itself.
+
+Point EDL and the planner at either inference provider:
+
+```bash
+export EDL_MODEL_PROVIDER=http
+export EDL_MODEL_BASE_URL=http://127.0.0.1:30000/v1
+export AGENT_PLANNER_PROVIDER=http
+export AGENT_PLANNER_BASE_URL=http://127.0.0.1:30000/v1
+```
+
+CUDA plans enable vLLM's `--cpu-offload-gb` and `--swap-space` controls. The
+[vLLM offload documentation](https://docs.vllm.ai/en/v0.20.0/examples/basic/offline_inference/#cpu-offload)
+notes that CPU offload effectively extends available GPU memory but benefits
+from a fast CPU–GPU interconnect.
+
+For persistent model storage and remote/container vLLM hosting, use the exact
+two-variant workflow in [`apps/model-server/README.md`](apps/model-server/README.md).
+It builds a Linux ARM64 CPU image for Apple Silicon hosts or an NVIDIA CUDA
+image for Linux GPU hosts, then runs the common model-manager wrapper. Set
+`model_server.enabled: true` in `configs/inference.yaml`; `device: cpu` selects
+port 8001 and `device: cuda` selects port 8002. Run
+`dullahan-inference activate` before sending requests to the selected `/v1`
+endpoint.
+
+The shared CPU/CUDA model manager stores complete model packages with optional
+LoRA adapters, provides authenticated package CRUD, and supports compact
+`lora_only` exports. Compact packages retain the model and adapter names but
+resolve the base checkpoint from Hugging Face when activated. Configure the
+client with `model_server.export_mode: full|lora_only`; see
+`apps/model-server/README.md` for the package layout and endpoints.
+
+### 4. Run A Local In-Process Execution
 
 The fastest path runs the agent runtime, CAL, and EDL in one process:
 
@@ -209,7 +278,7 @@ For the full structured result:
 dullahan-agent "Explain the key risks in a pairs trade between two semiconductor stocks" --max-depth 1 --json
 ```
 
-### 4. Inspect Artifacts
+### 5. Inspect Artifacts
 
 When `--persist-artifacts` is set, Dullahan writes a run folder under
 `memory/executions/<trace_id>/`.
@@ -457,6 +526,7 @@ Common environment variables:
 | `AGENT_PLANNER_PROVIDER` | `deterministic` or `http`. | `deterministic` |
 | `AGENT_PLANNER_BASE_URL` | OpenAI-compatible planner endpoint. | `http://127.0.0.1:30000/v1` |
 | `AGENT_PLANNER_MODEL` | Planner model name. | `local-planner` |
+| `DULLAHAN_INFERENCE_CONFIG` | YAML file used by `dullahan-inference`. | `configs/inference.yaml` |
 
 The default deterministic providers make the repo runnable without external
 model infrastructure. For model-backed runs, point the planner or EDL provider

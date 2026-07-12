@@ -1,0 +1,32 @@
+services:
+  model-server-cpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+      args:
+        CPU_BASE_IMAGE: dullahan/vllm-cpu-base:${VLLM_VERSION:-0.24.0}
+    image: dullahan/model-server-cpu:${VLLM_VERSION:-0.24.0}
+    container_name: dullahan-model-server-cpu
+    ports:
+      - "8001:8080"
+    volumes:
+      - cpu-models:/models
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      MODEL_ADMIN_TOKEN: ${MODEL_ADMIN_TOKEN:?set MODEL_ADMIN_TOKEN}
+      HF_TOKEN: ${HF_TOKEN:-}
+      MODEL_EXPORT_MODE: ${MODEL_EXPORT_MODE:-full}
+      DULLAHAN_BACKEND: cpu
+      VLLM_EXTRA_ARGS: '["--device","cpu","--dtype","float32"]'
+      VLLM_STARTUP_TIMEOUT: "1800"
+      VLLM_CPU_KVCACHE_SPACE: "8"
+    shm_size: "8gb"
+    cap_add:
+      - SYS_NICE
+    security_opt:
+      - seccomp=unconfined
+    restart: unless-stopped
+
+volumes:
+  cpu-models:
+  hf-cache:

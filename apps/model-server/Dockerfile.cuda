@@ -1,0 +1,21 @@
+ARG CUDA_BASE_IMAGE=dullahan/vllm-cuda-base:0.24.0
+FROM ${CUDA_BASE_IMAGE}
+
+USER root
+WORKDIR /opt/dullahan
+COPY server/requirements.txt /tmp/manager-requirements.txt
+RUN python -m pip install --no-cache-dir \
+    -r /tmp/manager-requirements.txt \
+    vllm-gguf-plugin==0.0.3
+COPY server /opt/dullahan/server
+RUN chmod +x /opt/dullahan/server/entrypoint.sh
+
+ENV MODEL_ROOT=/models \
+    MANAGER_PORT=8080 \
+    VLLM_HOST=127.0.0.1 \
+    VLLM_PORT=8000 \
+    VLLM_TARGET_DEVICE=cuda \
+    DULLAHAN_BACKEND=cuda
+VOLUME ["/models"]
+EXPOSE 8080
+ENTRYPOINT ["/opt/dullahan/server/entrypoint.sh"]

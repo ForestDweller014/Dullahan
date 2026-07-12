@@ -20,12 +20,17 @@ dependencies = [
 dullahan-agent = "agent_runtime.cli:main"
 dullahan-cal = "cal.server:main"
 dullahan-edl = "edl.server:main"
+dullahan-inference = "dullahan_inference.cli:main"
+dullahan-benchmark-gguf = "dullahan_inference.benchmark_cli:main"
 dullahan-mcp-cal = "dullahan_mcp.server_factories:cal_stdio_main"
 dullahan-mcp-edl = "dullahan_mcp.server_factories:edl_stdio_main"
 dullahan-graphify = "graph_builder.graphify:main"
 
 [project.optional-dependencies]
 dev = [
+  "httpx>=0.28,<1",
+  "huggingface-hub>=0.27,<2",
+  "python-multipart>=0.0.20,<1",
   "pytest>=7.4,<8",
 ]
 
@@ -36,18 +41,24 @@ where = [
   "apps/agent-runtime/src",
   "apps/mcp-servers/src",
   "apps/graph-builder/src",
+  "apps/inference/src",
   "packages/shared/src",
   "packages/kg/src",
   "packages/world-state/src",
 ]
 
 [tool.pytest.ini_options]
+markers = [
+  "local_inference: runs a real local inference model and is opt-in",
+]
 pythonpath = [
   "apps/cal/src",
   "apps/edl/src",
   "apps/agent-runtime/src",
   "apps/mcp-servers/src",
   "apps/graph-builder/src",
+  "apps/inference/src",
+  "apps/model-server",
   "packages/shared/src",
   "packages/kg/src",
   "packages/world-state/src",
@@ -58,6 +69,8 @@ testpaths = [
   "apps/cal/tests",
   "apps/edl/tests",
   "apps/graph-builder/tests",
+  "apps/inference/tests",
+  "apps/model-server/tests",
   "packages/shared/tests",
   "packages/kg/tests",
   "packages/world-state/tests",

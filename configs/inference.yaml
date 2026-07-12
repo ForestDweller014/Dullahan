@@ -1,0 +1,81 @@
+# qwen starts a vLLM OpenAI-compatible server; ollama starts a compatibility proxy.
+provider: qwen
+
+# auto selects CUDA, Apple Metal, or CPU based on available hardware.
+device: auto
+
+# auto selects GPTQ on CUDA and GGUF on CPU. Set gptq, gguf, awq, or none to override.
+quantization: auto
+
+models:
+  # All configured Qwen checkpoints are in the requested 7B-9B range.
+  parameter_billions: 7.61
+  base: Qwen/Qwen3-8B
+  gptq: Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4
+  gguf: Qwen/Qwen2.5-7B-Instruct-GGUF:Q4_K_M
+  awq: Qwen/Qwen2.5-7B-Instruct-AWQ
+  tokenizer: Qwen/Qwen2.5-7B-Instruct
+
+offload:
+  enabled: true
+  # Stop automatic quantization at 4-bit, then size host offload from any VRAM gap.
+  auto_size: true
+  cpu_offload_gb: 8
+  max_cpu_offload_gb: 64
+  # Applied as vLLM swap space for additional host-memory headroom.
+  swap_space_gb: 4
+  reserve_system_memory_gb: 4
+  runtime_overhead_factor: 1.5
+  minimum_quantization_bits: 4
+
+vllm:
+  executable: vllm
+  # Aliases preserve the model names already used by the planner and expert registry.
+  served_model_names:
+    - local-planner
+    - local-slm-context
+    - local-slm-dispatch
+    - local-slm-runtime
+    - local-slm-kg
+  dtype: auto
+  max_model_len: 8192
+  gpu_memory_utilization: 0.90
+  # null uses every detected CUDA device; set an integer to override.
+  tensor_parallel_size: null
+  trust_remote_code: false
+  enforce_eager: false
+  extra_args: []
+
+ollama:
+  executable: ollama
+  base_url: http://127.0.0.1:11434
+  model: qwen3:8b
+  parameter_billions: 8.2
+  launch_server: false
+  startup_timeout_seconds: 30
+  request_timeout_seconds: 120
+  keep_alive: 10m
+  # Avoid spending short planner/expert token budgets on hidden Qwen3 reasoning.
+  think: false
+  num_gpu: null
+  options: {}
+
+# Set enabled=true to use one of the two Docker model-server variants instead
+# of launching vLLM directly. device=auto/cpu/cuda selects this target too.
+model_server:
+  enabled: false
+  model: qwen-local
+  admin_token_env: MODEL_ADMIN_TOKEN
+  # full includes base weights and adapters; lora_only includes the named base reference + adapters.
+  export_mode: full
+  activation_extra_args: []
+  cpu:
+    public_url: http://127.0.0.1:8001
+  cuda:
+    public_url: http://127.0.0.1:8002
+
+server:
+  host: 0.0.0.0
+  advertised_host: 127.0.0.1
+  port: 30000
+  log_level: info

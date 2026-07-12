@@ -98,3 +98,19 @@ def test_agent_runtime_selects_http_planner_provider() -> None:
     )
 
     assert isinstance(provider, OpenAICompatiblePlannerProvider)
+
+
+def test_agent_runtime_config_reads_planner_environment(monkeypatch, tmp_path) -> None:
+    configs = tmp_path / "configs"
+    configs.mkdir()
+    (configs / "recursion.yaml").write_text("max_depth: 1\n", encoding="utf-8")
+    monkeypatch.setenv("AGENT_PLANNER_PROVIDER", "http")
+    monkeypatch.setenv("AGENT_PLANNER_MODEL", "local-planner")
+    monkeypatch.setenv("AGENT_PLANNER_BASE_URL", "http://inference.local/v1")
+    monkeypatch.setenv("AGENT_PLANNER_TIMEOUT_SECONDS", "45")
+
+    config = AgentRuntimeConfig.from_files(tmp_path)
+
+    assert config.planner_provider == "http"
+    assert config.planner_base_url == "http://inference.local/v1"
+    assert config.planner_timeout_seconds == 45

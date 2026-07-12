@@ -1,0 +1,35 @@
+services:
+  model-server-cuda:
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda
+      args:
+        CUDA_BASE_IMAGE: dullahan/vllm-cuda-base:${VLLM_VERSION:-0.24.0}
+    image: dullahan/model-server-cuda:${VLLM_VERSION:-0.24.0}
+    container_name: dullahan-model-server-cuda
+    ports:
+      - "8002:8080"
+    volumes:
+      - cuda-models:/models
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      MODEL_ADMIN_TOKEN: ${MODEL_ADMIN_TOKEN:?set MODEL_ADMIN_TOKEN}
+      HF_TOKEN: ${HF_TOKEN:-}
+      MODEL_EXPORT_MODE: ${MODEL_EXPORT_MODE:-full}
+      DULLAHAN_BACKEND: cuda
+      VLLM_EXTRA_ARGS: '["--device","cuda","--dtype","auto","--gpu-memory-utilization","0.90","--cpu-offload-gb","8","--swap-space","4"]'
+      VLLM_STARTUP_TIMEOUT: "900"
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities:
+                - gpu
+    restart: unless-stopped
+
+volumes:
+  cuda-models:
+  hf-cache:

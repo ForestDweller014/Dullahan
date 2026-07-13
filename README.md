@@ -84,14 +84,18 @@ flowchart TD
 EDL loads the generated expert registry for each single or batch dispatch, scores
 the subquery against every expert's cluster-derived role context, and runs exactly
 one selected expert. Batch requests reuse the loaded registry and execute individual
-route-and-run operations concurrently while preserving request order.
+route-and-run operations concurrently while preserving request order. Once routing
+selects an expert, a service-wide per-expert gate admits at most that profile's
+`max_concurrency` active runner invocations; excess work waits without preventing
+other experts from using their own capacity. Slots are released even when inference
+raises an error. `max_dispatch_concurrency` remains the outer batch-wide worker cap.
 
 ```mermaid
 flowchart TB
     Request["DispatchRequest<br/>subquery + bounded ContextBundle"] --> Service["ExpertDispatchService<br/>/dispatch or /dispatch/batch"]
 
     subgraph RegistryData["Generated expert memory"]
-        ExpertsYaml["memory/graph/experts.yaml<br/>expert ID, cluster, model, role path"]
+        ExpertsYaml["memory/graph/experts.yaml<br/>expert ID, cluster, model, role path,<br/>max_concurrency"]
         RoleDocs["memory/documents/clusters/*.md<br/>cluster-specialized role context"]
     end
 
@@ -111,15 +115,16 @@ flowchart TB
     Threshold -->|"yes"| TopExpert["Highest-probability expert"]
     Threshold -->|"no"| Fallback["Deterministic fallback<br/>first expert by ID"]
 
-    TopExpert --> Prompt
-    Fallback --> Prompt
+    TopExpert --> Gate["Per-expert concurrency gate<br/>shared across single + batch dispatch<br/>active instances &lt; max_concurrency"]
+    Fallback --> Gate
+    Gate --> Prompt
     Request --> Prompt["ExpertPromptBuilder<br/>role + subquery + first 5 context docs"]
     Prompt --> Runner["ExpertRunner"]
     Runner --> Provider["OpenAICompatibleHttpProvider"]
     Provider -->|"POST /v1/completions<br/>selected expert model alias"| Generation["Qwen via vLLM,<br/>model-server, or Ollama proxy"]
     Generation --> Response["ExpertResponse<br/>answer + citations + route confidence<br/>+ model/token metadata"]
 
-    Service -. "batch: bounded ThreadPoolExecutor" .-> Router
+    Service -. "batch: max_dispatch_concurrency workers" .-> Router
 ```
 
 ### Inference Module
@@ -184,7 +189,7 @@ flowchart TB
     Fit -->|"provider=ollama"| OllamaApp
     Fit -->|"model_server=true"| AdminClient
 
-    GenerationConsumers["Generation consumers<br/>agent planner + synthesis<br/>EDL expert execution"]
+    GenerationConsumers["Generation consumers<br/>agent planner + synthesis<br/>EDL expert execution<br/>(per-expert gated in EDL)"]
     SemanticConsumers["Semantic consumers<br/>CAL retrieval + token budgeting<br/>EDL expert routing"]
     VllmApi --> GenerationConsumers
     StableApi --> GenerationConsumers
@@ -239,6 +244,7 @@ flowchart TB
         PgVector["PostgreSQL + pgvector<br/>optional live world-state backend"]
         Edl["apps/edl<br/>Expert Dispatch Layer<br/>/dispatch + /dispatch/batch"]
         Router["ExpertRegistry + AttentionRouter"]
+        ExpertGate["Per-expert concurrency gate<br/>profile max_concurrency<br/>within each EDL process"]
         ExpertRunner["Prompt builder + ExpertRunner"]
     end
 
@@ -278,7 +284,7 @@ flowchart TB
     Cal -->|"bounded ContextBundle"| EdlTools
     EdlTools -->|"in-process call or HTTP :8200"| Edl
     ExpertMemory --> Router
-    Edl --> Router --> ExpertRunner
+    Edl --> Router --> ExpertGate --> ExpertRunner
     ExpertRunner -->|"ExpertResponse"| Runtime
     Runtime --> Aggregator
     Aggregator -->|"final response"| User

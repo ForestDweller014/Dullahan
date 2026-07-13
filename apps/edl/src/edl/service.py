@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from threading import Condition
 
 from dullahan_shared.embeddings import EmbeddingModel, OpenAICompatibleEmbeddingModel
 from dullahan_shared.schemas.expert import ExpertProfile, ExpertResponse
@@ -22,6 +25,31 @@ from edl.execution.model_provider import (
 from edl.execution.prompt import ExpertPromptBuilder
 
 
+class _ExpertConcurrencyLimiter:
+    def __init__(self) -> None:
+        self._condition = Condition()
+        self._active_instances: dict[str, int] = {}
+
+    @contextmanager
+    def reserve(self, expert: ExpertProfile) -> Iterator[None]:
+        with self._condition:
+            self._condition.wait_for(
+                lambda: self._active_instances.get(expert.id, 0) < expert.max_concurrency
+            )
+            self._active_instances[expert.id] = self._active_instances.get(expert.id, 0) + 1
+
+        try:
+            yield
+        finally:
+            with self._condition:
+                remaining = self._active_instances[expert.id] - 1
+                if remaining:
+                    self._active_instances[expert.id] = remaining
+                else:
+                    del self._active_instances[expert.id]
+                self._condition.notify_all()
+
+
 class ExpertDispatchService:
     def __init__(
         self,
@@ -35,6 +63,7 @@ class ExpertDispatchService:
         self.router = router
         self.runner = runner
         self.max_dispatch_concurrency = max_dispatch_concurrency
+        self._expert_concurrency = _ExpertConcurrencyLimiter()
 
     @classmethod
     def from_config(
@@ -94,8 +123,9 @@ class ExpertDispatchService:
         experts: list[ExpertProfile],
     ) -> ExpertResponse:
         route = self.router.select(request.subquery, experts)
-        return self.runner.run(
-            request=request,
-            expert=route.expert,
-            route=route,
-        )
+        with self._expert_concurrency.reserve(route.expert):
+            return self.runner.run(
+                request=request,
+                expert=route.expert,
+                route=route,
+            )

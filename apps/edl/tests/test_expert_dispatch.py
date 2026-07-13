@@ -1,9 +1,12 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
 from time import sleep
 
+import pytest
+
 from dullahan_shared.schemas.context import ContextBundle, ContextDocument, ContextSource
-from dullahan_shared.schemas.expert import ExpertResponse
+from dullahan_shared.schemas.expert import ExpertProfile, ExpertResponse
 from edl.api.schemas import BatchDispatchRequest, DispatchRequest
 from edl.config import EdlConfig
 from edl.dispatch.attention_router import AttentionRouter
@@ -187,3 +190,123 @@ def test_edl_batch_dispatch_runs_expert_instances_concurrently() -> None:
 
     assert len(response.responses) == 3
     assert runner.max_active > 1
+
+
+# Verifies an expert's configured concurrency limit applies across simultaneous dispatch calls.
+def test_edl_enforces_expert_max_concurrency_across_dispatch_calls() -> None:
+    expert = ExpertProfile(
+        id="expert:limited",
+        cluster_id="cluster:limited",
+        role_context="Handles every request in this test.",
+        model="limited-model",
+        max_concurrency=2,
+    )
+
+    class StaticRegistry:
+        def load(self) -> list[ExpertProfile]:
+            return [expert]
+
+    class MeasuringRunner:
+        def __init__(self) -> None:
+            self.active = 0
+            self.max_active = 0
+            self.lock = Lock()
+
+        def run(self, request, expert, route):
+            with self.lock:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            sleep(0.03)
+            with self.lock:
+                self.active -= 1
+            return ExpertResponse(
+                sender_id=request.sender_id,
+                query_id=request.query_id,
+                subquery=request.subquery,
+                expert_id=expert.id,
+                response="ok",
+                confidence=route.probability,
+            )
+
+    runner = MeasuringRunner()
+    service = ExpertDispatchService(
+        registry=StaticRegistry(),
+        router=AttentionRouter(embedding_model=KeywordEmbeddingModel()),
+        runner=runner,
+        max_dispatch_concurrency=8,
+    )
+    requests = [
+        DispatchRequest(
+            sender_id="agent:root",
+            query_id=f"query:limited:{index}",
+            subquery=f"Handle limited request {index}",
+            context=ContextBundle(query_id=f"query:limited:{index}"),
+        )
+        for index in range(8)
+    ]
+
+    with ThreadPoolExecutor(max_workers=len(requests)) as executor:
+        responses = list(executor.map(service.dispatch, requests))
+
+    assert len(responses) == len(requests)
+    assert runner.max_active == expert.max_concurrency
+
+
+# Verifies a failed expert invocation releases its slot for later work.
+def test_edl_releases_expert_concurrency_slot_after_failure() -> None:
+    expert = ExpertProfile(
+        id="expert:failure",
+        cluster_id="cluster:failure",
+        role_context="Fails once and then succeeds.",
+        model="failure-model",
+        max_concurrency=1,
+    )
+
+    class StaticRegistry:
+        def load(self) -> list[ExpertProfile]:
+            return [expert]
+
+    class FailsOnceRunner:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run(self, request, expert, route):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("inference failed")
+            return ExpertResponse(
+                sender_id=request.sender_id,
+                query_id=request.query_id,
+                subquery=request.subquery,
+                expert_id=expert.id,
+                response="recovered",
+                confidence=route.probability,
+            )
+
+    runner = FailsOnceRunner()
+    service = ExpertDispatchService(
+        registry=StaticRegistry(),
+        router=AttentionRouter(embedding_model=KeywordEmbeddingModel()),
+        runner=runner,
+        max_dispatch_concurrency=2,
+    )
+    first = DispatchRequest(
+        sender_id="agent:root",
+        query_id="query:failure:1",
+        subquery="Fail this request",
+        context=ContextBundle(query_id="query:failure:1"),
+    )
+    second = DispatchRequest(
+        sender_id="agent:root",
+        query_id="query:failure:2",
+        subquery="Recover this request",
+        context=ContextBundle(query_id="query:failure:2"),
+    )
+
+    with pytest.raises(RuntimeError, match="inference failed"):
+        service.dispatch(first)
+
+    response = service.dispatch(second)
+
+    assert response.response.response == "recovered"
+    assert runner.calls == 2

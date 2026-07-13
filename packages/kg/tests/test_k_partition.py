@@ -5,6 +5,7 @@ from dullahan_kg.graph import KnowledgeGraph
 from dullahan_shared.schemas.graph import EdgeType, GraphEdge, GraphNode, NodeType
 
 
+# Verifies that partition by k limits cluster size and assigns every node.
 def test_partition_by_k_limits_cluster_size_and_assigns_every_node() -> None:
     nodes = [
         GraphNode(id=f"concept:{name}", type=NodeType.CONCEPT, title=name)
@@ -25,6 +26,7 @@ def test_partition_by_k_limits_cluster_size_and_assigns_every_node() -> None:
     assert clusters[0].metadata["generated_by"] == "partition_by_k"
 
 
+# Verifies that partition by k rejects non positive k.
 def test_partition_by_k_rejects_non_positive_k() -> None:
     graph = KnowledgeGraph.from_parts(nodes=[], edges=[])
 

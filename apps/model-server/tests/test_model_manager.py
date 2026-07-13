@@ -39,10 +39,12 @@ def archive_bytes(path: Path) -> bytes:
     return payload.getvalue()
 
 
+# Verifies that the model manager exposes exactly the supported CPU and CUDA variants.
 def test_manager_variants_are_exactly_cpu_and_cuda() -> None:
     assert {backend.value for backend in model_server.Backend} == {"cpu", "cuda"}
 
 
+# Verifies that GPTQ and AWQ packages default to CUDA-only backend support.
 @pytest.mark.parametrize("quantization", ["gptq", "awq"])
 def test_cuda_quantization_defaults_to_cuda_only(
     tmp_path: Path,
@@ -56,6 +58,7 @@ def test_cuda_quantization_defaults_to_cuda_only(
     assert manifest["supported_backends"] == ["cuda"]
 
 
+# Verifies that GGUF packages default to both CPU and CUDA backend support.
 def test_gguf_defaults_to_cpu_and_cuda(tmp_path: Path) -> None:
     model = tmp_path / "model"
     model.mkdir()
@@ -70,6 +73,7 @@ def test_gguf_defaults_to_cpu_and_cuda(tmp_path: Path) -> None:
     assert model_server.launch_model_path(model, manifest) == gguf
 
 
+# Verifies that CPU rejects CUDA only checkpoint.
 def test_cpu_rejects_cuda_only_checkpoint() -> None:
     with pytest.raises(HTTPException, match="does not support the cpu backend"):
         model_server.validate_backend_compatibility(
@@ -78,6 +82,7 @@ def test_cpu_rejects_cuda_only_checkpoint() -> None:
         )
 
 
+# Verifies that archive traversal is rejected.
 def test_archive_traversal_is_rejected(tmp_path: Path) -> None:
     archive = tmp_path / "unsafe.tar"
     with tarfile.open(archive, "w") as stream:
@@ -90,6 +95,7 @@ def test_archive_traversal_is_rejected(tmp_path: Path) -> None:
         model_server.safe_extract_tar(archive, tmp_path / "destination")
 
 
+# Verifies that activation cannot override manager flags.
 @pytest.mark.parametrize(
     "args",
     [["--model", "/tmp/other"], ["--port=9999"], ["--device", "cpu"]],
@@ -99,6 +105,7 @@ def test_activation_cannot_override_manager_flags(args: list[str]) -> None:
         model_server.validate_activation_args(args)
 
 
+# Verifies that LoRA only package uses named base and stored adapters.
 def test_lora_only_package_uses_named_base_and_stored_adapters(tmp_path: Path) -> None:
     package = tmp_path / "expert"
     package.mkdir()
@@ -130,6 +137,7 @@ def test_lora_only_package_uses_named_base_and_stored_adapters(tmp_path: Path) -
     ]
 
 
+# Verifies that activation command loads named base and LoRA adapters.
 def test_activation_command_loads_named_base_and_lora_adapters(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -191,11 +199,13 @@ def test_activation_command_loads_named_base_and_lora_adapters(
     assert f"legal={adapter.resolve()}" in command
 
 
+# Verifies that activation rejects invalid LoRA capacity.
 def test_activation_rejects_invalid_lora_capacity() -> None:
     with pytest.raises(ValueError, match="max_cpu_loras"):
         model_server.ActivateRequest(max_loras=8, max_cpu_loras=4)
 
 
+# Verifies that model crud metadata and LoRA only export round trip.
 def test_model_crud_metadata_and_lora_only_export_round_trip(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -281,6 +291,7 @@ def test_model_crud_metadata_and_lora_only_export_round_trip(
         assert [adapter["name"] for adapter in restored_metadata["adapters"]] == ["legal"]
 
 
+# Verifies that get model metadata requires auth and returns 404.
 def test_get_model_metadata_requires_auth_and_returns_404(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

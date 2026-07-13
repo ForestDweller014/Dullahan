@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MODEL_SERVER = ROOT / "apps" / "model-server"
 
 
+# Verifies that python distribution declares apache license.
 def test_python_distribution_declares_apache_license() -> None:
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
@@ -19,6 +20,7 @@ def test_python_distribution_declares_apache_license() -> None:
     assert (ROOT / "THIRD_PARTY_NOTICES.md").is_file()
 
 
+# Verifies that model server images include license materials.
 def test_model_server_images_include_license_materials() -> None:
     assert (MODEL_SERVER / "LICENSE").read_bytes() == (ROOT / "LICENSE").read_bytes()
     for name in ("NOTICE", "THIRD_PARTY_NOTICES.md"):
@@ -29,6 +31,7 @@ def test_model_server_images_include_license_materials() -> None:
         assert "COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /licenses/dullahan/" in contents
 
 
+# Verifies that documentation identifies model artifacts as separately licensed.
 def test_model_artifacts_are_documented_as_separately_licensed() -> None:
     notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
 

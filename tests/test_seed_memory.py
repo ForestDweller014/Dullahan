@@ -8,6 +8,7 @@ from dullahan_kg.storage.yaml_graph_store import YamlGraphStore
 ROOT = Path(__file__).resolve().parents[1]
 
 
+# Verifies that seed memory graph loads.
 def test_seed_memory_graph_loads() -> None:
     graph = YamlGraphStore(ROOT / "memory" / "graph").load()
 
@@ -16,6 +17,7 @@ def test_seed_memory_graph_loads() -> None:
     assert len(graph.edges) >= 6
 
 
+# Verifies that seed memory documents exist.
 def test_seed_memory_documents_exist() -> None:
     graph = YamlGraphStore(ROOT / "memory" / "graph").load()
     paths = []
@@ -30,6 +32,7 @@ def test_seed_memory_documents_exist() -> None:
     assert missing == []
 
 
+# Verifies that every seed expert references an existing cluster and role-context document.
 def test_seed_experts_reference_existing_clusters_and_documents() -> None:
     graph = YamlGraphStore(ROOT / "memory" / "graph").load()
     with (ROOT / "memory" / "graph" / "experts.yaml").open("r", encoding="utf-8") as stream:

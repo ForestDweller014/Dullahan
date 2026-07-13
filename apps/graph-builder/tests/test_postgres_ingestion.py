@@ -44,6 +44,7 @@ class FakePsycopg:
         return FakeConnection()
 
 
+# Verifies that export PostgreSQL context writes markdown collection.
 def test_export_postgres_context_writes_markdown_collection(tmp_path, monkeypatch) -> None:
     rows_module = types.SimpleNamespace(dict_row=object())
     monkeypatch.setitem(sys.modules, "psycopg", FakePsycopg)

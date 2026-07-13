@@ -40,6 +40,7 @@ def initialize_repo(tmp_path: Path) -> tuple[Path, Path]:
     return repo, remote
 
 
+# Verifies that auto-publish commits only Graphify outputs while preserving user work.
 def test_publish_commits_graph_outputs_without_user_work(tmp_path: Path) -> None:
     repo, remote = initialize_repo(tmp_path)
     graph_dir = repo / "graphify-out"
@@ -66,6 +67,7 @@ def test_publish_commits_graph_outputs_without_user_work(tmp_path: Path) -> None
     assert remote_graph.stdout == '{"version": 2}\n'
 
 
+# Verifies that hook patch is idempotent.
 def test_hook_patch_is_idempotent() -> None:
     hook = """#!/bin/sh
 # graphify-hook-start

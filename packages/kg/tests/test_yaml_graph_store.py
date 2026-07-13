@@ -47,6 +47,7 @@ def build_graph() -> KnowledgeGraph:
     )
 
 
+# Verifies that YAML graph store round trips graph.
 def test_yaml_graph_store_round_trips_graph(tmp_path: Path) -> None:
     store = YamlGraphStore(tmp_path / "graph")
     store.save(build_graph())
@@ -58,6 +59,7 @@ def test_yaml_graph_store_round_trips_graph(tmp_path: Path) -> None:
     assert loaded.nodes_for_cluster("cluster:dispatch")[0].id == "concept:edl"
 
 
+# Verifies that neighbors walk edges without returning origin.
 def test_neighbors_walk_edges_without_returning_origin() -> None:
     graph = build_graph()
 
@@ -66,6 +68,7 @@ def test_neighbors_walk_edges_without_returning_origin() -> None:
     assert [node.id for node in neighbors] == ["concept:edl"]
 
 
+# Verifies that missing edge reference fails validation.
 def test_missing_edge_reference_fails_validation() -> None:
     cal = GraphNode(id="concept:cal", type=NodeType.CONCEPT, title="CAL")
     broken_edge = GraphEdge(

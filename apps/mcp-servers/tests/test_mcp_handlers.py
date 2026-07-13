@@ -45,6 +45,7 @@ class FakeEdlTool:
         )
 
 
+# Verifies that send to CAL handler validates and returns JSON shape.
 def test_send_to_cal_handler_validates_and_returns_json_shape() -> None:
     tool = FakeCalTool()
     handler = CalMcpHandler(tool)
@@ -70,6 +71,7 @@ def test_send_to_cal_handler_validates_and_returns_json_shape() -> None:
     assert "send_to_CAL" in handler.tools
 
 
+# Verifies that send to EDL handler validates and returns JSON shape.
 def test_send_to_edl_handler_validates_and_returns_json_shape() -> None:
     tool = FakeEdlTool()
     handler = EdlMcpHandler(tool)
@@ -92,6 +94,7 @@ def test_send_to_edl_handler_validates_and_returns_json_shape() -> None:
     assert "send_to_EDL" in handler.tools
 
 
+# Verifies that the stdio MCP server returns its tool definition from tools/list.
 def test_stdio_server_lists_tools() -> None:
     handler = CalMcpHandler(FakeCalTool())
     server = JsonRpcMcpServer(
@@ -110,6 +113,7 @@ def test_stdio_server_lists_tools() -> None:
     ]
 
 
+# Verifies that stdio server calls CAL tool and returns structured content.
 def test_stdio_server_calls_cal_tool_and_returns_structured_content() -> None:
     tool = FakeCalTool()
     handler = CalMcpHandler(tool)
@@ -144,6 +148,7 @@ def test_stdio_server_calls_cal_tool_and_returns_structured_content() -> None:
     assert tool.calls[0]["subquery"].query == "Retrieve context"
 
 
+# Verifies that stdio server calls EDL tool and reports unknown tools.
 def test_stdio_server_calls_edl_tool_and_reports_unknown_tools() -> None:
     handler = EdlMcpHandler(FakeEdlTool())
     server = JsonRpcMcpServer(

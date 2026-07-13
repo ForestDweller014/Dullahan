@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 
 import agent_runtime.planning.provider as provider_module
-from agent_runtime.config import AgentRuntimeConfig
 from agent_runtime.agent import AgentRuntime
+from agent_runtime.aggregation import OpenAICompatibleSynthesisProvider
+from agent_runtime.config import AgentRuntimeConfig
 from agent_runtime.planning.provider import (
-    DeterministicPlannerProvider,
     OpenAICompatiblePlannerProvider,
     PlannerRequest,
 )
@@ -27,22 +27,7 @@ class FakeHttpResponse:
         return json.dumps(self.payload).encode("utf-8")
 
 
-def test_deterministic_planner_provider_limits_subqueries() -> None:
-    result = DeterministicPlannerProvider().plan(
-        PlannerRequest(
-            parent_query=QueryEnvelope(
-                sender_id="user",
-                query_id="query:root",
-                query="How should CAL and EDL cooperate?",
-            ),
-            max_breadth=2,
-        )
-    )
-
-    assert result.provider == "deterministic-planner"
-    assert len(result.subqueries) == 2
-
-
+# Verifies that HTTP planner provider parses line based subqueries.
 def test_http_planner_provider_parses_line_based_subqueries(monkeypatch) -> None:
     requests = []
 
@@ -58,7 +43,11 @@ def test_http_planner_provider_parses_line_based_subqueries(monkeypatch) -> None
             {
                 "choices": [
                     {
-                        "text": "1. What context is needed?\n2. Which expert should answer?\n3. Ignore this"
+                        "text": (
+                            "1. What context is needed?\n"
+                            "2. Which expert should answer?\n"
+                            "3. Ignore this"
+                        )
                     }
                 ]
             }
@@ -85,8 +74,10 @@ def test_http_planner_provider_parses_line_based_subqueries(monkeypatch) -> None
     assert result.subqueries == ["What context is needed?", "Which expert should answer?"]
     assert requests[0]["url"] == "http://planner.local/v1/completions"
     assert requests[0]["payload"]["model"] == "planner-model"
+    assert requests[0]["payload"]["temperature"] == 0
 
 
+# Verifies that agent runtime selects HTTP planner provider.
 def test_agent_runtime_selects_http_planner_provider() -> None:
     provider = AgentRuntime._build_planner_provider(
         AgentRuntimeConfig(
@@ -100,6 +91,31 @@ def test_agent_runtime_selects_http_planner_provider() -> None:
     assert isinstance(provider, OpenAICompatiblePlannerProvider)
 
 
+# Verifies that the runtime defaults to the OpenAI-compatible HTTP planner.
+def test_agent_runtime_defaults_to_http_planner_provider() -> None:
+    provider = AgentRuntime._build_planner_provider(AgentRuntimeConfig())
+
+    assert isinstance(provider, OpenAICompatiblePlannerProvider)
+
+
+# Verifies that agent runtime builds an OpenAI-compatible final synthesis provider.
+def test_agent_runtime_selects_http_synthesis_provider() -> None:
+    provider = AgentRuntime._build_synthesis_provider(
+        AgentRuntimeConfig(
+            synthesis_provider="http",
+            synthesis_base_url="http://synthesis.local/v1",
+            synthesis_model="final-model",
+            synthesis_timeout_seconds=9,
+        )
+    )
+
+    assert isinstance(provider, OpenAICompatibleSynthesisProvider)
+    assert provider.base_url == "http://synthesis.local/v1"
+    assert provider.model == "final-model"
+    assert provider.timeout_seconds == 9
+
+
+# Verifies that planner and synthesis inference settings come from the environment.
 def test_agent_runtime_config_reads_planner_environment(monkeypatch, tmp_path) -> None:
     configs = tmp_path / "configs"
     configs.mkdir()
@@ -108,9 +124,19 @@ def test_agent_runtime_config_reads_planner_environment(monkeypatch, tmp_path) -
     monkeypatch.setenv("AGENT_PLANNER_MODEL", "local-planner")
     monkeypatch.setenv("AGENT_PLANNER_BASE_URL", "http://inference.local/v1")
     monkeypatch.setenv("AGENT_PLANNER_TIMEOUT_SECONDS", "45")
+    monkeypatch.setenv("AGENT_SYNTHESIS_PROVIDER", "http")
+    monkeypatch.setenv("AGENT_SYNTHESIS_MODEL", "final-model")
+    monkeypatch.setenv("AGENT_SYNTHESIS_BASE_URL", "http://synthesis.local/v1")
+    monkeypatch.setenv("AGENT_SYNTHESIS_TIMEOUT_SECONDS", "75")
+    monkeypatch.setenv("AGENT_SYNTHESIS_MAX_TOKENS", "700")
 
     config = AgentRuntimeConfig.from_files(tmp_path)
 
     assert config.planner_provider == "http"
     assert config.planner_base_url == "http://inference.local/v1"
     assert config.planner_timeout_seconds == 45
+    assert config.synthesis_provider == "http"
+    assert config.synthesis_model == "final-model"
+    assert config.synthesis_base_url == "http://synthesis.local/v1"
+    assert config.synthesis_timeout_seconds == 75
+    assert config.synthesis_max_tokens == 700

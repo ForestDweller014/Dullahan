@@ -28,6 +28,7 @@ class FakeHttpResponse:
         return json.dumps(self.payload).encode("utf-8")
 
 
+# Verifies that HTTP CAL tool posts augment request.
 def test_http_cal_tool_posts_augment_request(monkeypatch) -> None:
     requests = []
 
@@ -75,6 +76,7 @@ def test_http_cal_tool_posts_augment_request(monkeypatch) -> None:
     assert requests[0]["payload"]["query_id"] == "query:child"
 
 
+# Verifies that HTTP CAL tool posts batch augment request.
 def test_http_cal_tool_posts_batch_augment_request(monkeypatch) -> None:
     requests = []
 
@@ -122,6 +124,7 @@ def test_http_cal_tool_posts_batch_augment_request(monkeypatch) -> None:
     assert requests[0]["payload"]["requests"][0]["query_id"] == "query:child"
 
 
+# Verifies that HTTP EDL tool posts dispatch request.
 def test_http_edl_tool_posts_dispatch_request(monkeypatch) -> None:
     requests = []
 
@@ -172,6 +175,7 @@ def test_http_edl_tool_posts_dispatch_request(monkeypatch) -> None:
     assert requests[0]["payload"]["context"]["documents"][0]["id"] == "doc:edl"
 
 
+# Verifies that HTTP EDL tool posts batch dispatch request.
 def test_http_edl_tool_posts_batch_dispatch_request(monkeypatch) -> None:
     requests = []
 
@@ -219,6 +223,7 @@ def test_http_edl_tool_posts_batch_dispatch_request(monkeypatch) -> None:
     assert requests[0]["payload"]["requests"][0]["query_id"] == "query:child"
 
 
+# Verifies that an upstream HTTP error is converted into HttpToolError with its details.
 def test_http_tool_raises_for_http_error(monkeypatch) -> None:
     def fake_urlopen(request, timeout):
         raise HTTPError(

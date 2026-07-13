@@ -2,10 +2,10 @@ from pathlib import Path
 
 import yaml
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
+# Verifies that docker compose defines CAL EDL and agent services.
 def test_docker_compose_defines_cal_edl_and_agent_services() -> None:
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
     services = compose["services"]
@@ -18,8 +18,14 @@ def test_docker_compose_defines_cal_edl_and_agent_services() -> None:
     assert "--transport" in services["agent"]["command"]
     assert "http://cal:8100" in services["agent"]["command"]
     assert "http://edl:8200" in services["agent"]["command"]
+    assert services["agent"]["environment"]["AGENT_SYNTHESIS_PROVIDER"] == "http"
+    assert (
+        services["agent"]["environment"]["AGENT_SYNTHESIS_BASE_URL"]
+        == "http://host.docker.internal:30000/v1"
+    )
 
 
+# Verifies that dockerfile installs project editable.
 def test_dockerfile_installs_project_editable() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 

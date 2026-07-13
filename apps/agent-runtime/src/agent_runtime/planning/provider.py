@@ -26,19 +26,6 @@ class PlannerProvider:
         raise NotImplementedError
 
 
-class DeterministicPlannerProvider(PlannerProvider):
-    def plan(self, request: PlannerRequest) -> PlannerResult:
-        candidates = [
-            "What context should CAL retrieve?",
-            "Which expert should EDL select?",
-            "What knowledge graph concepts are relevant?",
-        ]
-        return PlannerResult(
-            subqueries=candidates[: request.max_breadth],
-            provider="deterministic-planner",
-        )
-
-
 class OpenAICompatiblePlannerProvider(PlannerProvider):
     def __init__(
         self,
@@ -60,6 +47,7 @@ class OpenAICompatiblePlannerProvider(PlannerProvider):
                     "model": self.model,
                     "prompt": prompt,
                     "max_tokens": 512,
+                    "temperature": 0,
                 }
             ).encode("utf-8"),
             headers={"Content-Type": "application/json", "Accept": "application/json"},
@@ -85,7 +73,8 @@ class OpenAICompatiblePlannerProvider(PlannerProvider):
         return "\n".join(
             [
                 "Generate only the subqueries needed to answer the parent query.",
-                "Return one subquery per line. Do not include reasoning.",
+                "Each subquery must be specific to the parent query and independently answerable.",
+                "Return exactly one subquery per line with no numbering, headings, or reasoning.",
                 f"Maximum subqueries: {request.max_breadth}",
                 "",
                 "Parent query:",

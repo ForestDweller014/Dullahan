@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from dullahan_shared.ids import new_id
 from dullahan_shared.schemas.query import QueryEnvelope
+
 from agent_runtime.planning.provider import (
-    DeterministicPlannerProvider,
     PlannerProvider,
     PlannerRequest,
 )
 
 
-class DeterministicSubqueryGenerator:
-    def __init__(self, provider: PlannerProvider | None = None) -> None:
-        self.provider = provider or DeterministicPlannerProvider()
+class SubqueryGenerator:
+    def __init__(self, provider: PlannerProvider) -> None:
+        self.provider = provider
 
     def generate(
         self,

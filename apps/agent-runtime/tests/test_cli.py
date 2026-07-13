@@ -2,13 +2,65 @@ from pathlib import Path
 
 from agent_runtime.cli import build_parser, main, run_from_args
 from agent_runtime.models import AgentRunResult
+from dullahan_shared.schemas.expert import ExpertResponse
 from dullahan_shared.schemas.query import QueryEnvelope
-
 
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_cli_run_accepts_limit_overrides() -> None:
+def install_fake_local_runtime(monkeypatch) -> None:
+    class FakeRuntime:
+        def __init__(self, config) -> None:
+            self.config = config
+
+        def run(self, request):
+            breadth = (
+                self.config.limits.max_breadth_per_agent
+                if self.config.limits.max_depth > 0
+                else 0
+            )
+            root = QueryEnvelope(
+                sender_id="user",
+                query_id="query:root",
+                query=request.query,
+            )
+            subqueries = [
+                QueryEnvelope(
+                    sender_id=root.query_id,
+                    query_id=f"query:child-{index}",
+                    query=f"Subquery {index}",
+                    depth=1,
+                )
+                for index in range(breadth)
+            ]
+            responses = [
+                ExpertResponse(
+                    sender_id=root.query_id,
+                    query_id=subquery.query_id,
+                    subquery=subquery.query,
+                    expert_id="expert:test",
+                    response="test response",
+                )
+                for subquery in subqueries
+            ]
+            return AgentRunResult(
+                root_query=root,
+                subqueries=subqueries,
+                expert_responses=responses,
+                trace_id="trace:test",
+                spans=[],
+                final_response="test response",
+            )
+
+    monkeypatch.setattr(
+        "agent_runtime.cli.AgentRuntime.local",
+        lambda config: FakeRuntime(config),
+    )
+
+
+# Verifies that CLI run accepts limit overrides.
+def test_cli_run_accepts_limit_overrides(monkeypatch) -> None:
+    install_fake_local_runtime(monkeypatch)
     args = build_parser().parse_args(
         [
             "How should recursive execution be inspected?",
@@ -28,7 +80,9 @@ def test_cli_run_accepts_limit_overrides() -> None:
     assert result.trace_id.startswith("trace:")
 
 
-def test_cli_text_output(capsys) -> None:
+# Verifies that CLI text mode reports the trace and execution counts.
+def test_cli_text_output(capsys, monkeypatch) -> None:
+    install_fake_local_runtime(monkeypatch)
     exit_code = main(
         [
             "How should CAL and EDL cooperate?",
@@ -48,7 +102,9 @@ def test_cli_text_output(capsys) -> None:
     assert "Subqueries: 1" in captured.out
 
 
-def test_cli_json_output(capsys) -> None:
+# Verifies that CLI JSON mode emits the structured run result.
+def test_cli_json_output(capsys, monkeypatch) -> None:
+    install_fake_local_runtime(monkeypatch)
     exit_code = main(
         [
             "Which expert should handle routing?",
@@ -69,6 +125,7 @@ def test_cli_json_output(capsys) -> None:
     assert '"expert_responses"' in captured.out
 
 
+# Verifies that CLI remote transport uses HTTP runtime.
 def test_cli_remote_transport_uses_http_runtime(monkeypatch) -> None:
     calls = {}
 

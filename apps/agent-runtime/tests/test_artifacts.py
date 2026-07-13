@@ -2,22 +2,66 @@ import json
 from pathlib import Path
 
 import yaml
-
 from agent_runtime.agent import AgentRuntime
+from agent_runtime.aggregation import SynthesisProvider, SynthesisRequest, SynthesisResult
 from agent_runtime.config import AgentRuntimeConfig
 from agent_runtime.models import AgentRunRequest
+from agent_runtime.planning.provider import PlannerProvider, PlannerRequest, PlannerResult
+from cal.config import CalConfig
 from dullahan_shared.schemas.execution import ExecutionLimits
+from edl.execution.model_provider import ModelProvider, ModelRequest, ModelResult
 
+from testing_fakes import KeywordEmbeddingModel, WhitespaceTokenCounter
 
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_agent_runtime_persists_execution_artifacts() -> None:
-    runtime = AgentRuntime.local(
+class StubPlannerProvider(PlannerProvider):
+    def plan(self, request: PlannerRequest) -> PlannerResult:
+        return PlannerResult(
+            subqueries=["What context is needed?"][: request.max_breadth],
+            provider="stub-planner",
+        )
+
+
+class StubModelProvider(ModelProvider):
+    def complete(self, request: ModelRequest) -> ModelResult:
+        return ModelResult(text="Test response", provider="stub-model", token_count=2)
+
+
+class StubSynthesisProvider(SynthesisProvider):
+    def synthesize(self, request: SynthesisRequest) -> SynthesisResult:
+        return SynthesisResult(
+            text="Synthesized artifact response",
+            provider="stub-synthesis",
+            prompt_tokens=20,
+            completion_tokens=3,
+        )
+
+
+def build_local_runtime(config: AgentRuntimeConfig, *, index_path: Path) -> AgentRuntime:
+    return AgentRuntime.local(
+        config,
+        planner_provider=StubPlannerProvider(),
+        model_provider=StubModelProvider(),
+        synthesis_provider=StubSynthesisProvider(),
+        embedding_model=KeywordEmbeddingModel(),
+        token_counter=WhitespaceTokenCounter(),
+        cal_config=CalConfig(
+            repo_root=config.repo_root,
+            world_state_index_path=index_path,
+        ),
+    )
+
+
+# Verifies artifact persistence with all external inference boundaries explicitly mocked.
+def test_agent_runtime_persists_execution_artifacts(tmp_path: Path) -> None:
+    runtime = build_local_runtime(
         AgentRuntimeConfig(
             repo_root=ROOT,
             limits=ExecutionLimits(max_depth=1, max_breadth_per_agent=1),
-        )
+        ),
+        index_path=tmp_path / "world-state.json",
     )
 
     result = runtime.run(
@@ -90,12 +134,14 @@ def test_agent_runtime_persists_execution_artifacts() -> None:
     assert "Query Instance" in (subquery_dir / "summary.md").read_text(encoding="utf-8")
 
 
-def test_agent_runtime_does_not_persist_artifacts_by_default() -> None:
-    runtime = AgentRuntime.local(
+# Verifies default non-persistence with all external inference boundaries explicitly mocked.
+def test_agent_runtime_does_not_persist_artifacts_by_default(tmp_path: Path) -> None:
+    runtime = build_local_runtime(
         AgentRuntimeConfig(
             repo_root=ROOT,
             limits=ExecutionLimits(max_depth=0, max_breadth_per_agent=1),
-        )
+        ),
+        index_path=tmp_path / "world-state.json",
     )
 
     result = runtime.run(AgentRunRequest(query="No artifact run"))

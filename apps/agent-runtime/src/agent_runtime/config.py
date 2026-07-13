@@ -2,21 +2,26 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
-
 from dullahan_shared.schemas.execution import ExecutionLimits
+from pydantic import BaseModel, Field
 
 
 class AgentRuntimeConfig(BaseModel):
     repo_root: Path = Field(default_factory=lambda: Path.cwd())
     limits: ExecutionLimits = Field(default_factory=ExecutionLimits)
     max_sibling_concurrency: int = Field(default=8, ge=1)
-    planner_provider: str = "deterministic"
+    planner_provider: Literal["http"] = "http"
     planner_model: str = "local-planner"
     planner_base_url: str = "http://127.0.0.1:30000/v1"
     planner_timeout_seconds: float = Field(default=30.0, gt=0)
+    synthesis_provider: Literal["http"] = "http"
+    synthesis_model: str = "local-planner"
+    synthesis_base_url: str = "http://127.0.0.1:30000/v1"
+    synthesis_timeout_seconds: float = Field(default=60.0, gt=0)
+    synthesis_max_tokens: int = Field(default=1024, ge=1)
 
     @classmethod
     def from_files(cls, repo_root: Path) -> AgentRuntimeConfig:
@@ -27,12 +32,19 @@ class AgentRuntimeConfig(BaseModel):
             repo_root=repo_root,
             limits=ExecutionLimits.model_validate(data),
             max_sibling_concurrency=data.get("max_sibling_concurrency", 8),
-            planner_provider=os.getenv("AGENT_PLANNER_PROVIDER", "deterministic"),
+            planner_provider=os.getenv("AGENT_PLANNER_PROVIDER", "http"),
             planner_model=os.getenv("AGENT_PLANNER_MODEL", "local-planner"),
-            planner_base_url=os.getenv(
-                "AGENT_PLANNER_BASE_URL", "http://127.0.0.1:30000/v1"
+            planner_base_url=os.getenv("AGENT_PLANNER_BASE_URL", "http://127.0.0.1:30000/v1"),
+            planner_timeout_seconds=float(os.getenv("AGENT_PLANNER_TIMEOUT_SECONDS", "30")),
+            synthesis_provider=os.getenv("AGENT_SYNTHESIS_PROVIDER", "http"),
+            synthesis_model=os.getenv(
+                "AGENT_SYNTHESIS_MODEL",
+                os.getenv("AGENT_PLANNER_MODEL", "local-planner"),
             ),
-            planner_timeout_seconds=float(
-                os.getenv("AGENT_PLANNER_TIMEOUT_SECONDS", "30")
+            synthesis_base_url=os.getenv(
+                "AGENT_SYNTHESIS_BASE_URL",
+                os.getenv("AGENT_PLANNER_BASE_URL", "http://127.0.0.1:30000/v1"),
             ),
+            synthesis_timeout_seconds=float(os.getenv("AGENT_SYNTHESIS_TIMEOUT_SECONDS", "60")),
+            synthesis_max_tokens=int(os.getenv("AGENT_SYNTHESIS_MAX_TOKENS", "1024")),
         )

@@ -2,28 +2,90 @@ from pathlib import Path
 from threading import Lock
 from time import perf_counter, sleep
 
-from agent_runtime.aggregation import ResponseAggregator
 from agent_runtime.agent import AgentRuntime
+from agent_runtime.aggregation import (
+    ResponseAggregator,
+    SynthesisProvider,
+    SynthesisRequest,
+    SynthesisResult,
+)
 from agent_runtime.config import AgentRuntimeConfig
 from agent_runtime.models import AgentRunRequest
-from agent_runtime.planning.subquery_generator import DeterministicSubqueryGenerator
+from agent_runtime.planning.provider import PlannerProvider, PlannerRequest, PlannerResult
+from agent_runtime.planning.subquery_generator import SubqueryGenerator
 from agent_runtime.recursion import RecursionGuard
 from cal.api.schemas import AugmentContextResponse
+from cal.config import CalConfig
 from dullahan_shared.schemas.context import ContextBundle
 from dullahan_shared.schemas.execution import ExecutionLimits, ExecutionStatus
 from dullahan_shared.schemas.expert import ExpertResponse
 from dullahan_shared.schemas.query import QueryEnvelope
+from edl.execution.model_provider import ModelProvider, ModelRequest, ModelResult
 
+from testing_fakes import KeywordEmbeddingModel, WhitespaceTokenCounter
 
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_agent_runtime_calls_cal_and_edl_for_subqueries() -> None:
-    runtime = AgentRuntime.local(
+class StubPlannerProvider(PlannerProvider):
+    def plan(self, request: PlannerRequest) -> PlannerResult:
+        candidates = [
+            "What context is required?",
+            "Which implementation constraints apply?",
+            "How should the result be verified?",
+        ]
+        return PlannerResult(
+            subqueries=candidates[: request.max_breadth],
+            provider="stub-planner",
+        )
+
+
+class StubModelProvider(ModelProvider):
+    def complete(self, request: ModelRequest) -> ModelResult:
+        return ModelResult(
+            text=f"Test response from {request.model}",
+            provider="stub-model",
+            token_count=4,
+        )
+
+
+class StubSynthesisProvider(SynthesisProvider):
+    def __init__(self) -> None:
+        self.requests: list[SynthesisRequest] = []
+
+    def synthesize(self, request: SynthesisRequest) -> SynthesisResult:
+        self.requests.append(request)
+        return SynthesisResult(
+            text="Synthesized final answer.",
+            provider="stub-synthesis",
+            prompt_tokens=40,
+            completion_tokens=4,
+        )
+
+
+def build_local_runtime(config: AgentRuntimeConfig, *, index_path: Path) -> AgentRuntime:
+    return AgentRuntime.local(
+        config,
+        planner_provider=StubPlannerProvider(),
+        model_provider=StubModelProvider(),
+        synthesis_provider=StubSynthesisProvider(),
+        embedding_model=KeywordEmbeddingModel(),
+        token_counter=WhitespaceTokenCounter(),
+        cal_config=CalConfig(
+            repo_root=config.repo_root,
+            world_state_index_path=index_path,
+        ),
+    )
+
+
+# Verifies runtime orchestration with planner, model, synthesis, embeddings, and tokenizer mocked.
+def test_agent_runtime_calls_cal_and_edl_for_subqueries(tmp_path: Path) -> None:
+    runtime = build_local_runtime(
         AgentRuntimeConfig(
             repo_root=ROOT,
             limits=ExecutionLimits(max_depth=2, max_breadth_per_agent=2),
-        )
+        ),
+        index_path=tmp_path / "world-state.json",
     )
 
     result = runtime.run(
@@ -32,36 +94,44 @@ def test_agent_runtime_calls_cal_and_edl_for_subqueries() -> None:
 
     assert len(result.subqueries) == 6
     assert len(result.expert_responses) == 6
-    assert "Root query:" in result.final_response
+    assert result.final_response == "Synthesized final answer."
     assert {subquery.depth for subquery in result.subqueries} == {1, 2}
-    assert any(response.sender_id == result.root_query.query_id for response in result.expert_responses)
+    assert any(
+        response.sender_id == result.root_query.query_id for response in result.expert_responses
+    )
     assert result.trace_id.startswith("trace:")
-    assert result.subqueries[0].metadata["generated_by"] == "deterministic-planner"
+    assert result.subqueries[0].metadata["generated_by"] == "stub-planner"
     assert {span.name for span in result.spans} >= {
         "agent.run",
         "agent.subquery",
         "cal.augment",
         "edl.dispatch",
+        "agent.synthesis",
     }
 
 
-def test_agent_runtime_honors_depth_limit() -> None:
-    runtime = AgentRuntime.local(
+# Verifies the depth limit with all external inference boundaries explicitly mocked.
+def test_agent_runtime_honors_depth_limit(tmp_path: Path) -> None:
+    runtime = build_local_runtime(
         AgentRuntimeConfig(
             repo_root=ROOT,
             limits=ExecutionLimits(max_depth=0, max_breadth_per_agent=3),
-        )
+        ),
+        index_path=tmp_path / "world-state.json",
     )
 
     result = runtime.run(AgentRunRequest(query="Will this recurse?"))
 
     assert result.subqueries == []
     assert result.expert_responses == []
-    assert len(result.spans) == 1
+    assert len(result.spans) == 2
     assert result.spans[0].attributes["subquery_count"] == 0
+    assert result.spans[1].name == "agent.synthesis"
+    assert result.spans[1].attributes["provider"] == "not-invoked"
     assert result.final_response.startswith("No expert responses")
 
 
+# Verifies that agent runtime loads recursion config.
 def test_agent_runtime_loads_recursion_config() -> None:
     config = AgentRuntimeConfig.from_files(ROOT)
 
@@ -70,12 +140,14 @@ def test_agent_runtime_loads_recursion_config() -> None:
     assert config.max_sibling_concurrency == 8
 
 
-def test_agent_runtime_traces_selected_expert_and_context_counts() -> None:
-    runtime = AgentRuntime.local(
+# Verifies runtime tracing with all external inference boundaries explicitly mocked.
+def test_agent_runtime_traces_selected_expert_and_context_counts(tmp_path: Path) -> None:
+    runtime = build_local_runtime(
         AgentRuntimeConfig(
             repo_root=ROOT,
             limits=ExecutionLimits(max_depth=2, max_breadth_per_agent=1),
-        )
+        ),
+        index_path=tmp_path / "world-state.json",
     )
 
     result = runtime.run(AgentRunRequest(query="How should CAL retrieve context?"))
@@ -88,8 +160,9 @@ def test_agent_runtime_traces_selected_expert_and_context_counts() -> None:
     assert cal_spans[0].attributes["context_document_count"] >= 1
 
 
-def test_agent_runtime_honors_total_instance_limit() -> None:
-    runtime = AgentRuntime.local(
+# Verifies total instance limits with all external inference boundaries explicitly mocked.
+def test_agent_runtime_honors_total_instance_limit(tmp_path: Path) -> None:
+    runtime = build_local_runtime(
         AgentRuntimeConfig(
             repo_root=ROOT,
             limits=ExecutionLimits(
@@ -97,7 +170,8 @@ def test_agent_runtime_honors_total_instance_limit() -> None:
                 max_breadth_per_agent=3,
                 max_total_agent_instances=2,
             ),
-        )
+        ),
+        index_path=tmp_path / "world-state.json",
     )
 
     result = runtime.run(AgentRunRequest(query="How should recursive execution stay bounded?"))
@@ -109,6 +183,7 @@ def test_agent_runtime_honors_total_instance_limit() -> None:
     assert all(span.status == ExecutionStatus.CANCELLED for span in skipped_spans)
 
 
+# Verifies that recursion guard rejects duplicate query signature.
 def test_recursion_guard_rejects_duplicate_query_signature() -> None:
     guard = RecursionGuard(ExecutionLimits(max_total_agent_instances=10))
     first = QueryEnvelope(
@@ -126,6 +201,7 @@ def test_recursion_guard_rejects_duplicate_query_signature() -> None:
     assert not guard.accept(duplicate)
 
 
+# Verifies that sibling subqueries overlap in execution up to the configured worker limit.
 def test_agent_runtime_executes_sibling_subqueries_concurrently() -> None:
     class MeasuringCalTool:
         def __init__(self) -> None:
@@ -167,10 +243,10 @@ def test_agent_runtime_executes_sibling_subqueries_concurrently() -> None:
             limits=ExecutionLimits(max_depth=1, max_breadth_per_agent=3),
             max_sibling_concurrency=3,
         ),
-        planner=DeterministicSubqueryGenerator(),
+        planner=SubqueryGenerator(StubPlannerProvider()),
         cal_tool=cal_tool,
         edl_tool=FastEdlTool(),
-        aggregator=ResponseAggregator(),
+        aggregator=ResponseAggregator(provider=StubSynthesisProvider()),
     )
 
     result = runtime.run(AgentRunRequest(query="Can siblings run concurrently?"))
@@ -180,6 +256,7 @@ def test_agent_runtime_executes_sibling_subqueries_concurrently() -> None:
     assert result.spans[0].attributes["max_sibling_concurrency"] == 3
 
 
+# Verifies that agent runtime uses batch tools for sibling subqueries.
 def test_agent_runtime_uses_batch_tools_for_sibling_subqueries() -> None:
     class BatchCalTool:
         def __init__(self) -> None:
@@ -231,15 +308,16 @@ def test_agent_runtime_uses_batch_tools_for_sibling_subqueries() -> None:
 
     cal_tool = BatchCalTool()
     edl_tool = BatchEdlTool()
+    synthesis_provider = StubSynthesisProvider()
     runtime = AgentRuntime(
         config=AgentRuntimeConfig(
             repo_root=ROOT,
             limits=ExecutionLimits(max_depth=1, max_breadth_per_agent=3),
         ),
-        planner=DeterministicSubqueryGenerator(),
+        planner=SubqueryGenerator(StubPlannerProvider()),
         cal_tool=cal_tool,
         edl_tool=edl_tool,
-        aggregator=ResponseAggregator(),
+        aggregator=ResponseAggregator(provider=synthesis_provider),
     )
 
     result = runtime.run(AgentRunRequest(query="Can sibling queries batch through CAL and EDL?"))
@@ -250,10 +328,19 @@ def test_agent_runtime_uses_batch_tools_for_sibling_subqueries() -> None:
     assert len(edl_tool.batch_calls[0]) == 3
     assert len(result.expert_responses) == 3
     assert all(response.expert_id == "expert:batch" for response in result.expert_responses)
-    assert all(span.attributes.get("batch") is True for span in result.spans if span.name == "cal.augment")
-    assert all(span.attributes.get("batch") is True for span in result.spans if span.name == "edl.dispatch")
+    assert len(synthesis_provider.requests) == 1
+    synthesis_prompt = synthesis_provider.requests[0].prompt
+    assert all(response.subquery in synthesis_prompt for response in result.expert_responses)
+    assert all(response.response in synthesis_prompt for response in result.expert_responses)
+    assert all(
+        span.attributes.get("batch") is True for span in result.spans if span.name == "cal.augment"
+    )
+    assert all(
+        span.attributes.get("batch") is True for span in result.spans if span.name == "edl.dispatch"
+    )
 
 
+# Verifies that agent runtime marks timed out subquery.
 def test_agent_runtime_marks_timed_out_subquery() -> None:
     class SlowCalTool:
         def send(
@@ -288,10 +375,10 @@ def test_agent_runtime_marks_timed_out_subquery() -> None:
             ),
             max_sibling_concurrency=1,
         ),
-        planner=DeterministicSubqueryGenerator(),
+        planner=SubqueryGenerator(StubPlannerProvider()),
         cal_tool=SlowCalTool(),
         edl_tool=FastEdlTool(),
-        aggregator=ResponseAggregator(),
+        aggregator=ResponseAggregator(provider=StubSynthesisProvider()),
     )
 
     started_at = perf_counter()

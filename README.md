@@ -45,7 +45,7 @@ audited, replayed, or used for later distillation.
 | `apps/mcp-servers` | Dependency-light stdio JSON-RPC MCP surfaces for `send_to_CAL` and `send_to_EDL`. |
 | `packages/kg` | Knowledge graph model, YAML graph storage, and K-partitioning. |
 | `packages/world-state` | Local persistent vector index over graph-backed Markdown documents. |
-| `packages/shared` | Pydantic schemas, IDs, deterministic embeddings, and retrieval helpers. |
+| `packages/shared` | Pydantic schemas, IDs, inference-backed embedding/tokenization clients, and retrieval helpers. |
 | `memory/` | Seed graph, cluster docs, expert registry, execution artifacts, and local indexes. |
 | `configs/` | Runtime recursion, retrieval, routing, and local configuration. |
 
@@ -55,7 +55,7 @@ audited, replayed, or used for later distillation.
 | --- | --- |
 | Runtime and services | Python, FastAPI, Uvicorn, REST APIs |
 | Agent integration | MCP stdio tools, OpenAI-compatible planner, expert, vLLM, and Ollama endpoints |
-| Context and retrieval | Graphify, graph-backed RAG, local WorldStateDB vector index, PostgreSQL + pgvector, deterministic embeddings |
+| Context and retrieval | Graphify, graph-backed RAG, local WorldStateDB vector index, PostgreSQL + pgvector, Qwen3 semantic embeddings |
 | Data and artifacts | JSON, YAML, Markdown, Mermaid |
 | Validation and schemas | Pydantic, pytest |
 | Local orchestration | Docker Compose, CLI entrypoints |
@@ -224,14 +224,20 @@ tag under `ollama.model`. The proxy uses Ollama's non-streaming
 OpenAI-compatible `/v1/completions` contract expected by Dullahan. Set
 `ollama.launch_server: true` if Dullahan should start `ollama serve` itself.
 
-Point EDL and the planner at either inference provider:
+EDL and the planner use the local OpenAI-compatible inference endpoint by default:
 
 ```bash
 export EDL_MODEL_PROVIDER=http
 export EDL_MODEL_BASE_URL=http://127.0.0.1:30000/v1
 export AGENT_PLANNER_PROVIDER=http
 export AGENT_PLANNER_BASE_URL=http://127.0.0.1:30000/v1
+export AGENT_SYNTHESIS_PROVIDER=http
+export AGENT_SYNTHESIS_BASE_URL=http://127.0.0.1:30000/v1
 ```
+
+Start `dullahan-inference serve` before running the agent. Planning, expert
+responses, and final answer synthesis fail visibly when the inference endpoint
+is unavailable; there is no template-response fallback.
 
 CUDA plans enable vLLM's `--cpu-offload-gb` and `--swap-space` controls. The
 [vLLM offload documentation](https://docs.vllm.ai/en/v0.20.0/examples/basic/offline_inference/#cpu-offload)
@@ -253,6 +259,12 @@ LoRA adapters, provides authenticated package CRUD, and supports compact
 resolve the base checkpoint from Hugging Face when activated. Configure the
 client with `model_server.export_mode: full|lora_only`; see
 `apps/model-server/README.md` for the package layout and endpoints.
+
+For interactive practical-capability and concurrency testing, open
+[`notebooks/dullahan_production_benchmark.ipynb`](notebooks/dullahan_production_benchmark.ipynb).
+Install its kernel dependencies with `uv sync --extra dev --extra notebook --inexact`.
+The notebook starts real CPU inference, accepts custom queries and prompts,
+exports raw evidence, and plots latency, throughput, semantic coverage, and memory deltas.
 
 ### 4. Run A Local In-Process Execution
 
@@ -308,8 +320,9 @@ instances/<query_id>/summary.md
 This is the filesystem memory surface: you can inspect what each agent asked,
 what context CAL supplied, which expert EDL selected, and what the expert
 returned. Each persisted `ContextBundle` also includes context optimization
-metadata such as candidate token count, selected token count, and estimated
-context reduction percentage for that subquery.
+metadata such as candidate token count, selected token count, tokenizer model,
+and context reduction percentage for that subquery. Counts come from the
+generation model's native tokenizer usage rather than word/character estimates.
 
 ### Exported Action / Inference Graph
 
@@ -519,18 +532,39 @@ Common environment variables:
 | `WORLD_STATE_BACKEND` | `local` or `postgres` retrieval backend for CAL. | `local` |
 | `WORLD_STATE_POSTGRES_DSN` | PostgreSQL DSN used when `WORLD_STATE_BACKEND=postgres`. | unset |
 | `WORLD_STATE_POSTGRES_TABLE` | pgvector table used for WorldStateDB documents. | `world_state_documents` |
-| `EDL_MODEL_PROVIDER` | `deterministic` or `http`. | `deterministic` |
+| `DULLAHAN_INFERENCE_BASE_URL` | Shared completion, embedding, and tokenizer endpoint. | `http://127.0.0.1:30000/v1` |
+| `DULLAHAN_EMBEDDING_MODEL` | Semantic model used consistently by WorldStateDB and EDL. | `qwen3-embedding:0.6b` |
+| `DULLAHAN_EMBEDDING_DIMENSIONS` | Vector size expected from the semantic model and pgvector. | `1024` |
+| `DULLAHAN_TOKENIZER_MODEL` | Exact generation tokenizer used by CAL token accounting. | `Qwen/Qwen3-8B` |
+| `DULLAHAN_INFERENCE_TIMEOUT_SECONDS` | Timeout for embedding and tokenizer inference calls. | `120` |
+| `EDL_MODEL_PROVIDER` | Expert model provider. Only `http` is supported. | `http` |
 | `EDL_MODEL_BASE_URL` | OpenAI-compatible model endpoint for expert execution. | `http://127.0.0.1:30000/v1` |
 | `EDL_MODEL_TIMEOUT_SECONDS` | Timeout for expert model calls. | `30` |
+| `EDL_MODEL_MAX_TOKENS` | Maximum completion tokens for an expert response. | `512` |
 | `EDL_MAX_DISPATCH_CONCURRENCY` | Max concurrent EDL dispatch workers. | `16` |
-| `AGENT_PLANNER_PROVIDER` | `deterministic` or `http`. | `deterministic` |
+| `AGENT_PLANNER_PROVIDER` | Planner provider. Only `http` is supported. | `http` |
 | `AGENT_PLANNER_BASE_URL` | OpenAI-compatible planner endpoint. | `http://127.0.0.1:30000/v1` |
 | `AGENT_PLANNER_MODEL` | Planner model name. | `local-planner` |
+| `AGENT_SYNTHESIS_PROVIDER` | Final-answer provider. Only `http` is supported. | `http` |
+| `AGENT_SYNTHESIS_BASE_URL` | OpenAI-compatible final synthesis endpoint. | `http://127.0.0.1:30000/v1` |
+| `AGENT_SYNTHESIS_MODEL` | Model used to synthesize paired subquery answers. | `local-planner` |
+| `AGENT_SYNTHESIS_TIMEOUT_SECONDS` | Timeout for final answer synthesis. | `60` |
+| `AGENT_SYNTHESIS_MAX_TOKENS` | Maximum completion tokens in the final answer. | `1024` |
 | `DULLAHAN_INFERENCE_CONFIG` | YAML file used by `dullahan-inference`. | `configs/inference.yaml` |
 
-The default deterministic providers make the repo runnable without external
-model infrastructure. For model-backed runs, point the planner or EDL provider
-at an OpenAI-compatible endpoint such as an SGLang `/v1` server.
+The planner, CAL, EDL, and final synthesizer require a real inference endpoint.
+The default `dullahan-inference` Ollama proxy provides completion,
+`/v1/embeddings`, and `/tokenize` endpoints from models placed by the same
+CPU/GPU policy. Pull both default models before the first run:
+
+```bash
+ollama pull qwen3:8b
+ollama pull qwen3-embedding:0.6b
+```
+
+Local vector indexes include the embedding model identifier and dimension in
+their filename and payload, so legacy hash indexes are never reused. Existing
+pgvector tables created with 128 dimensions must be rebuilt at 1,024 dimensions.
 
 ## How It Compares
 
@@ -553,7 +587,7 @@ Dullahan is designed to scale across several axes:
 | Expert count | One or more experts per cluster in `experts.yaml`. | Regenerate experts from larger graphs, split clusters by K, or specialize experts by domain and modality. |
 | Subquery fanout | Breadth, depth, total-instance, timeout, and sibling-concurrency limits. | Tune per workload, add queue-backed execution, or distribute CAL/EDL workers. |
 | Service deployment | Local process or HTTP CAL/EDL services. | Run CAL and EDL independently on Kubernetes, attach model-serving backends, and autoscale by request pressure. |
-| Model execution | Deterministic provider or OpenAI-compatible HTTP provider. | Route experts to SGLang, KServe, TensorRT-LLM, or other serving stacks. |
+| Model execution | OpenAI-compatible HTTP provider backed by local Qwen inference. | Route experts to SGLang, KServe, TensorRT-LLM, or other serving stacks. |
 | Observability | Execution spans and YAML/Markdown artifacts. | Export spans to OpenTelemetry, Prometheus, Grafana, or trace stores. |
 
 The architecture maps naturally onto high-throughput inference infrastructure:

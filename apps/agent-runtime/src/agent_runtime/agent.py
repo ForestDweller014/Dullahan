@@ -1,34 +1,40 @@
 from __future__ import annotations
 
-from concurrent.futures import TimeoutError, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 from cal.config import CalConfig
 from cal.service import ContextAugmentationService
+from dullahan_shared.embeddings import EmbeddingModel
 from dullahan_shared.ids import new_id
 from dullahan_shared.schemas.context import ContextBundle
 from dullahan_shared.schemas.execution import ExecutionStatus
 from dullahan_shared.schemas.expert import ExpertResponse
 from dullahan_shared.schemas.query import QueryEnvelope
+from dullahan_shared.tokenization import TokenCounter
 from edl.config import EdlConfig
+from edl.execution.model_provider import ModelProvider
 from edl.service import ExpertDispatchService
 
-from agent_runtime.aggregation import ResponseAggregator
+from agent_runtime.aggregation import (
+    OpenAICompatibleSynthesisProvider,
+    ResponseAggregator,
+    SynthesisProvider,
+)
 from agent_runtime.artifacts import ExecutionArtifactStore
 from agent_runtime.collections import ThreadSafeList
 from agent_runtime.config import AgentRuntimeConfig
 from agent_runtime.models import AgentRunRequest, AgentRunResult
 from agent_runtime.planning.provider import (
-    DeterministicPlannerProvider,
     OpenAICompatiblePlannerProvider,
     PlannerProvider,
 )
-from agent_runtime.planning.subquery_generator import DeterministicSubqueryGenerator
+from agent_runtime.planning.subquery_generator import SubqueryGenerator
 from agent_runtime.recursion import RecursionGuard
-from agent_runtime.tracing import InMemoryTraceCollector
 from agent_runtime.tools.http_cal import HttpCalTool
 from agent_runtime.tools.http_edl import HttpEdlTool
 from agent_runtime.tools.local_cal import LocalCalTool
 from agent_runtime.tools.local_edl import LocalEdlTool
+from agent_runtime.tracing import InMemoryTraceCollector
 
 
 class AgentRuntime:
@@ -36,7 +42,7 @@ class AgentRuntime:
         self,
         *,
         config: AgentRuntimeConfig,
-        planner: DeterministicSubqueryGenerator,
+        planner: SubqueryGenerator,
         cal_tool: LocalCalTool,
         edl_tool: LocalEdlTool,
         aggregator: ResponseAggregator,
@@ -48,17 +54,42 @@ class AgentRuntime:
         self.aggregator = aggregator
 
     @classmethod
-    def local(cls, config: AgentRuntimeConfig) -> AgentRuntime:
+    def local(
+        cls,
+        config: AgentRuntimeConfig,
+        *,
+        planner_provider: PlannerProvider | None = None,
+        model_provider: ModelProvider | None = None,
+        embedding_model: EmbeddingModel | None = None,
+        token_counter: TokenCounter | None = None,
+        cal_config: CalConfig | None = None,
+        synthesis_provider: SynthesisProvider | None = None,
+    ) -> AgentRuntime:
+        edl_config = EdlConfig.from_env().model_copy(update={"repo_root": config.repo_root})
+        resolved_cal_config = cal_config or CalConfig.from_env().model_copy(
+            update={"repo_root": config.repo_root}
+        )
         return cls(
             config=config,
-            planner=DeterministicSubqueryGenerator(cls._build_planner_provider(config)),
+            planner=SubqueryGenerator(planner_provider or cls._build_planner_provider(config)),
             cal_tool=LocalCalTool(
-                ContextAugmentationService.from_config(CalConfig(repo_root=config.repo_root))
+                ContextAugmentationService.from_config(
+                    resolved_cal_config,
+                    embedding_model=embedding_model,
+                    token_counter=token_counter,
+                )
             ),
             edl_tool=LocalEdlTool(
-                ExpertDispatchService.from_config(EdlConfig(repo_root=config.repo_root))
+                ExpertDispatchService.from_config(
+                    edl_config,
+                    model_provider=model_provider,
+                    embedding_model=embedding_model,
+                )
             ),
-            aggregator=ResponseAggregator(),
+            aggregator=ResponseAggregator(
+                provider=synthesis_provider or cls._build_synthesis_provider(config),
+                max_tokens=config.synthesis_max_tokens,
+            ),
         )
 
     @classmethod
@@ -69,26 +100,34 @@ class AgentRuntime:
         cal_base_url: str,
         edl_base_url: str,
         timeout_seconds: float = 30.0,
+        synthesis_provider: SynthesisProvider | None = None,
     ) -> AgentRuntime:
         return cls(
             config=config,
-            planner=DeterministicSubqueryGenerator(cls._build_planner_provider(config)),
+            planner=SubqueryGenerator(cls._build_planner_provider(config)),
             cal_tool=HttpCalTool(cal_base_url, timeout_seconds=timeout_seconds),
             edl_tool=HttpEdlTool(edl_base_url, timeout_seconds=timeout_seconds),
-            aggregator=ResponseAggregator(),
+            aggregator=ResponseAggregator(
+                provider=synthesis_provider or cls._build_synthesis_provider(config),
+                max_tokens=config.synthesis_max_tokens,
+            ),
         )
 
     @staticmethod
     def _build_planner_provider(config: AgentRuntimeConfig) -> PlannerProvider:
-        if config.planner_provider == "deterministic":
-            return DeterministicPlannerProvider()
-        if config.planner_provider == "http":
-            return OpenAICompatiblePlannerProvider(
-                base_url=config.planner_base_url,
-                model=config.planner_model,
-                timeout_seconds=config.planner_timeout_seconds,
-            )
-        raise ValueError(f"unknown planner provider: {config.planner_provider}")
+        return OpenAICompatiblePlannerProvider(
+            base_url=config.planner_base_url,
+            model=config.planner_model,
+            timeout_seconds=config.planner_timeout_seconds,
+        )
+
+    @staticmethod
+    def _build_synthesis_provider(config: AgentRuntimeConfig) -> SynthesisProvider:
+        return OpenAICompatibleSynthesisProvider(
+            base_url=config.synthesis_base_url,
+            model=config.synthesis_model,
+            timeout_seconds=config.synthesis_timeout_seconds,
+        )
 
     def run(self, request: AgentRunRequest) -> AgentRunResult:
         trace = InMemoryTraceCollector()
@@ -121,6 +160,23 @@ class AgentRuntime:
             collected_contexts=contexts,
         )
 
+        synthesis_span = trace.start_span(
+            name="agent.synthesis",
+            query_id=root_query.query_id,
+            parent_span_id=root_span.span_id,
+            depth=root_query.depth,
+            attributes={"expert_response_count": len(responses)},
+        )
+        synthesis = self.aggregator.synthesize(root_query, responses)
+        trace.end_span(
+            synthesis_span,
+            attributes={
+                "provider": synthesis.provider,
+                "prompt_token_count": synthesis.prompt_tokens,
+                "completion_token_count": synthesis.completion_tokens,
+            },
+        )
+
         trace.end_span(
             root_span,
             status=ExecutionStatus.SUCCEEDED,
@@ -137,7 +193,7 @@ class AgentRuntime:
             expert_responses=responses,
             trace_id=trace.trace_id,
             spans=trace.spans,
-            final_response=self.aggregator.aggregate(root_query, responses),
+            final_response=synthesis.text,
         )
         if request.persist_artifacts:
             artifact_dir = ExecutionArtifactStore(

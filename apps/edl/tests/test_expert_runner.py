@@ -2,23 +2,34 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 import edl.execution.model_provider as model_provider_module
+import pytest
+from dullahan_shared.schemas.context import ContextBundle, ContextDocument, ContextSource
+from dullahan_shared.schemas.expert import ExpertProfile
 from edl.api.schemas import DispatchRequest
-from edl.dispatch.attention_router import ExpertAttentionScore, ExpertRoute
 from edl.config import EdlConfig
+from edl.dispatch.attention_router import ExpertAttentionScore, ExpertRoute
 from edl.execution.expert_runner import ExpertRunner
 from edl.execution.model_provider import (
-    DeterministicLocalSlmProvider,
+    ModelProvider,
+    ModelRequest,
+    ModelResult,
     OpenAICompatibleHttpProvider,
 )
 from edl.execution.prompt import ExpertPromptBuilder
 from edl.service import ExpertDispatchService
-from dullahan_shared.schemas.context import ContextBundle, ContextDocument, ContextSource
-from dullahan_shared.schemas.expert import ExpertProfile
 
 
+class StubModelProvider(ModelProvider):
+    def complete(self, request: ModelRequest) -> ModelResult:
+        return ModelResult(
+            text=f"Grounded test response for {request.model}",
+            provider="stub-model",
+            token_count=5,
+        )
+
+
+# Verifies that expert runner builds prompt and records model metadata.
 def test_expert_runner_builds_prompt_and_records_model_metadata() -> None:
     expert = ExpertProfile(
         id="expert:test",
@@ -56,15 +67,15 @@ def test_expert_runner_builds_prompt_and_records_model_metadata() -> None:
 
     response = ExpertRunner(
         prompt_builder=ExpertPromptBuilder(),
-        model_provider=DeterministicLocalSlmProvider(),
+        model_provider=StubModelProvider(),
     ).run(request, expert, route)
 
     assert response.expert_id == "expert:test"
     assert response.confidence == 0.7
     assert response.cited_context_document_ids == ["doc:cal"]
     assert response.routing_metadata["model"] == "local-slm-test"
-    assert response.routing_metadata["model_provider"] == "deterministic-local-slm"
-    assert "How should CAL retrieve context?" in response.response
+    assert response.routing_metadata["model_provider"] == "stub-model"
+    assert response.response == "Grounded test response for local-slm-test"
 
 
 class FakeHttpResponse:
@@ -81,6 +92,7 @@ class FakeHttpResponse:
         return json.dumps(self.payload).encode("utf-8")
 
 
+# Verifies that openai compatible HTTP provider posts completion request.
 def test_openai_compatible_http_provider_posts_completion_request(monkeypatch) -> None:
     requests = []
 
@@ -119,6 +131,27 @@ def test_openai_compatible_http_provider_posts_completion_request(monkeypatch) -
     assert requests[0]["payload"]["model"] == "local-slm-test"
 
 
+# Verifies that EDL rejects missing native usage instead of faking a word-based count.
+def test_openai_compatible_http_provider_requires_native_token_usage(monkeypatch) -> None:
+    monkeypatch.setattr(
+        model_provider_module,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeHttpResponse(
+            {"choices": [{"text": "Expert model response"}]}
+        ),
+    )
+    provider = OpenAICompatibleHttpProvider(base_url="http://model.local/v1")
+
+    with pytest.raises(
+        model_provider_module.ModelProviderError,
+        match="native completion token usage",
+    ):
+        provider.complete(
+            ModelRequest(model="local-slm-test", prompt="prompt", max_tokens=8)
+        )
+
+
+# Verifies that EDL config selects HTTP model provider.
 def test_edl_config_selects_http_model_provider() -> None:
     provider = ExpertDispatchService._build_model_provider(
         EdlConfig(
@@ -131,6 +164,7 @@ def test_edl_config_selects_http_model_provider() -> None:
     assert isinstance(provider, OpenAICompatibleHttpProvider)
 
 
+# Verifies that EDL config rejects unknown model provider.
 def test_edl_config_rejects_unknown_model_provider() -> None:
-    with pytest.raises(ValueError, match="unknown EDL model provider"):
-        ExpertDispatchService._build_model_provider(EdlConfig(model_provider="bogus"))
+    with pytest.raises(ValueError, match="Input should be 'http'"):
+        EdlConfig(model_provider="bogus")

@@ -21,6 +21,7 @@ class FakeResponse:
         ).encode()
 
 
+# Verifies that Ollama client uses non streaming generate API.
 def test_ollama_client_uses_non_streaming_generate_api(monkeypatch) -> None:
     config = InferenceConfig(provider="ollama")
     plan = resolve_inference_plan(
@@ -53,3 +54,47 @@ def test_ollama_client_uses_non_streaming_generate_api(monkeypatch) -> None:
     }
     assert result.text == "local answer"
     assert result.completion_tokens == 4
+
+
+# Verifies Ollama semantic embedding requests while the external Ollama process is mocked.
+def test_ollama_client_uses_configured_embedding_model(monkeypatch) -> None:
+    config = InferenceConfig(
+        provider="ollama",
+        embeddings={"model": "semantic-model", "dimensions": 2},
+    )
+    plan = resolve_inference_plan(
+        config,
+        inventory=DeviceInventory(device="cpu", detection_source="test"),
+    )
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["payload"] = json.loads(request.data)
+        captured["timeout"] = timeout
+        return type(
+            "EmbeddingResponse",
+            (),
+            {
+                "__enter__": lambda self: self,
+                "__exit__": lambda self, *_args: None,
+                "read": lambda self: json.dumps(
+                    {
+                        "embeddings": [[1.0, 0.0], [0.0, 1.0]],
+                        "prompt_eval_count": 6,
+                    }
+                ).encode(),
+            },
+        )()
+
+    monkeypatch.setattr("dullahan_inference.ollama.urlopen", fake_urlopen)
+
+    result = OllamaClient(config, plan).embed(["context", "routing"])
+
+    assert captured["url"].endswith("/api/embed")
+    assert captured["payload"]["model"] == "semantic-model"
+    assert captured["payload"]["input"] == ["context", "routing"]
+    assert captured["payload"]["truncate"] is False
+    assert captured["payload"]["options"]["num_gpu"] == 0
+    assert result.embeddings == [[1.0, 0.0], [0.0, 1.0]]
+    assert result.prompt_tokens == 6

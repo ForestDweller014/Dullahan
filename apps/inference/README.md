@@ -1,7 +1,9 @@
 # Local Inference
 
 The inference application resolves `configs/inference.yaml` into either a Qwen
-vLLM server or an OpenAI-compatible proxy backed by Ollama. Device and
+vLLM generation server or an OpenAI-compatible proxy backed by Ollama. The
+default Ollama proxy serves completions, semantic embeddings, and native
+generation-tokenizer counts. Device and
 quantization selection are deterministic and can be inspected without loading a
 model:
 
@@ -13,6 +15,20 @@ dullahan-inference serve
 The Qwen provider requires a platform-appropriate vLLM installation. GGUF
 serving also requires `vllm-gguf-plugin`. The Ollama provider requires the
 `ollama` executable when `ollama.launch_server` is enabled.
+
+Install both default Ollama models before serving the complete pipeline:
+
+```bash
+ollama pull qwen3:8b
+ollama pull qwen3-embedding:0.6b
+```
+
+`POST /v1/embeddings` uses the configured dedicated embedding model through the
+same Ollama process and CPU/GPU placement policy. `POST /tokenize` loads the
+configured Qwen generation tokenizer once, counts its actual token IDs, and
+never estimates from words or characters. The direct Qwen/vLLM mode remains
+generation-only for embeddings, so use the default Ollama provider for the
+complete CAL/EDL pipeline.
 
 For model-server LoRA workloads, `model_server.max_loras` sets the number of
 distinct adapters that vLLM may place in one batch and `max_cpu_loras` sizes
@@ -38,13 +54,19 @@ Ollama reasoning is disabled by default (`ollama.think: false`) so short token
 budgets return visible text instead of being consumed entirely by Qwen3's hidden
 thinking. Enable it in config when a workload benefits from reasoning traces.
 
-Run the deterministic suite normally. The real-model smoke test is opt-in:
+Run the fast unit suite normally. The real-model CPU integration suite is opt-in:
 
 ```bash
 pytest apps/inference/tests
 DULLAHAN_RUN_LOCAL_INFERENCE=1 pytest \
   apps/inference/tests/test_local_inference.py -m local_inference -v
 ```
+
+That suite starts `dullahan-inference` on a free localhost port, forces Ollama
+CPU placement, and verifies a basic completion, semantic separation, native
+tokenizer usage, query-specific planner output, and a context-grounded expert
+response. It expects both `DULLAHAN_TEST_MODEL` (default `qwen3:8b`) and
+`DULLAHAN_TEST_EMBEDDING_MODEL` (default `qwen3-embedding:0.6b`) to be installed.
 
 ## GGUF performance benchmark
 

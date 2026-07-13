@@ -6,6 +6,7 @@ import pytest
 from dullahan_inference.benchmark import BenchmarkCase, OllamaGGUFBenchmark
 
 
+# Verifies that local Qwen GGUF benchmark records performance and memory.
 @pytest.mark.local_inference
 def test_local_qwen_gguf_benchmark_records_performance_and_memory() -> None:
     if os.getenv("DULLAHAN_RUN_LOCAL_INFERENCE") != "1":

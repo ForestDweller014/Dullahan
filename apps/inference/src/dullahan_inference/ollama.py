@@ -23,6 +23,12 @@ class OllamaResult:
     prompt_tokens: int
 
 
+@dataclass(frozen=True)
+class OllamaEmbeddingResult:
+    embeddings: list[list[float]]
+    prompt_tokens: int
+
+
 class OllamaClient:
     def __init__(self, config: InferenceConfig, plan: ResolvedInferencePlan) -> None:
         self.config = config
@@ -71,6 +77,52 @@ class OllamaClient:
             completion_tokens=int(data.get("eval_count", 0)),
             prompt_tokens=int(data.get("prompt_eval_count", 0)),
         )
+
+    def embed(self, texts: list[str]) -> OllamaEmbeddingResult:
+        options = dict(self.config.embeddings.options)
+        if self.plan.device.value == "cpu":
+            options["num_gpu"] = 0
+        elif self.config.ollama.num_gpu is not None:
+            options["num_gpu"] = self.config.ollama.num_gpu
+        payload = {
+            "model": self.config.embeddings.model,
+            "input": texts,
+            "truncate": self.config.embeddings.truncate,
+            "keep_alive": self.config.embeddings.keep_alive,
+            "options": options,
+        }
+        data = self._post("/api/embed", payload)
+        embeddings = [list(map(float, vector)) for vector in data.get("embeddings", [])]
+        if len(embeddings) != len(texts):
+            raise OllamaError(
+                f"Ollama returned {len(embeddings)} embeddings for {len(texts)} inputs"
+            )
+        if any(len(vector) != self.config.embeddings.dimensions for vector in embeddings):
+            actual = sorted({len(vector) for vector in embeddings})
+            raise OllamaError(
+                f"Ollama embedding dimensions {actual} do not match configured "
+                f"{self.config.embeddings.dimensions}"
+            )
+        return OllamaEmbeddingResult(
+            embeddings=embeddings,
+            prompt_tokens=int(data.get("prompt_eval_count", 0)),
+        )
+
+    def _post(self, route: str, payload: dict) -> dict:
+        request = Request(
+            f"{self.config.ollama.base_url.rstrip('/')}{route}",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=self.config.ollama.request_timeout_seconds) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise OllamaError(f"Ollama failed with HTTP {exc.code}: {detail}") from exc
+        except URLError as exc:
+            raise OllamaError(f"Ollama request failed: {exc.reason}") from exc
 
 
 class OllamaProcess:

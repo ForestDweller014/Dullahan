@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import BaseModel, Field
-
-from dullahan_shared.embeddings import HashingEmbeddingModel, cosine_similarity
+from dullahan_shared.embeddings import EmbeddingModel, cosine_similarity
 from dullahan_shared.schemas.context import ContextDocument
+from pydantic import BaseModel, Field
 
 
 class VectorIndexEntry(BaseModel):
@@ -20,22 +19,25 @@ class VectorSearchResult(BaseModel):
 
 class LocalVectorIndex(BaseModel):
     dimensions: int
+    embedding_model_id: str = "legacy-hashing"
     entries: list[VectorIndexEntry] = Field(default_factory=list)
 
     @classmethod
     def build(
         cls,
         documents: list[ContextDocument],
-        embedding_model: HashingEmbeddingModel,
+        embedding_model: EmbeddingModel,
     ) -> LocalVectorIndex:
+        embeddings = embedding_model.embed_many([document.text for document in documents])
         return cls(
             dimensions=embedding_model.dimensions,
+            embedding_model_id=embedding_model.model_id,
             entries=[
                 VectorIndexEntry(
                     document=document,
-                    embedding=embedding_model.embed(document.text),
+                    embedding=embedding,
                 )
-                for document in documents
+                for document, embedding in zip(documents, embeddings, strict=True)
             ],
         )
 
@@ -51,7 +53,7 @@ class LocalVectorIndex(BaseModel):
         self,
         query: str,
         *,
-        embedding_model: HashingEmbeddingModel,
+        embedding_model: EmbeddingModel,
         top_k: int,
     ) -> list[VectorSearchResult]:
         if top_k <= 0:

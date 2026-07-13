@@ -8,16 +8,32 @@ from edl.api.schemas import BatchDispatchRequest, DispatchRequest
 from edl.config import EdlConfig
 from edl.dispatch.attention_router import AttentionRouter
 from edl.dispatch.expert_registry import ExpertRegistry
+from edl.execution.model_provider import ModelProvider, ModelRequest, ModelResult
 from edl.service import ExpertDispatchService
 
+from testing_fakes import KeywordEmbeddingModel
 
 ROOT = Path(__file__).resolve().parents[3]
 
 
+class StubModelProvider(ModelProvider):
+    def complete(self, request: ModelRequest) -> ModelResult:
+        return ModelResult(
+            text=f"Test expert response from {request.model}",
+            provider="stub-model",
+            token_count=5,
+        )
+
+
 def build_service() -> ExpertDispatchService:
-    return ExpertDispatchService.from_config(EdlConfig(repo_root=ROOT))
+    return ExpertDispatchService.from_config(
+        EdlConfig(repo_root=ROOT),
+        model_provider=StubModelProvider(),
+        embedding_model=KeywordEmbeddingModel(),
+    )
 
 
+# Verifies that expert registry loads role contexts.
 def test_expert_registry_loads_role_contexts() -> None:
     experts = ExpertRegistry(
         repo_root=ROOT,
@@ -28,6 +44,7 @@ def test_expert_registry_loads_role_contexts() -> None:
     assert all(expert.role_context for expert in experts)
 
 
+# Verifies EDL routing behavior with inference embeddings explicitly mocked.
 def test_edl_routes_context_query_to_context_memory_expert() -> None:
     request = DispatchRequest(
         sender_id="agent:root",
@@ -53,11 +70,12 @@ def test_edl_routes_context_query_to_context_memory_expert() -> None:
     assert response.routing_metadata["candidate_count"] >= 1
     assert response.routing_metadata["route_probability"] == response.confidence
     assert response.routing_metadata["attention_scoring"] == "embedding_cosine"
-    assert response.routing_metadata["model_provider"] == "deterministic-local-slm"
+    assert response.routing_metadata["model_provider"] == "stub-model"
     assert "local-slm-context" in response.response
     assert not hasattr(response, "context")
 
 
+# Verifies dispatch routing behavior with inference embeddings explicitly mocked.
 def test_edl_routes_dispatch_query_to_dispatch_expert() -> None:
     request = DispatchRequest(
         sender_id="agent:root",
@@ -73,13 +91,14 @@ def test_edl_routes_dispatch_query_to_dispatch_expert() -> None:
     assert response.routing_metadata["model"] == "local-slm-dispatch"
 
 
+# Verifies attention softmax behavior with inference embeddings explicitly mocked.
 def test_attention_router_returns_softmax_distribution() -> None:
     experts = ExpertRegistry(
         repo_root=ROOT,
         experts_path=ROOT / "memory" / "graph" / "experts.yaml",
     ).load()
 
-    route = AttentionRouter().select(
+    route = AttentionRouter(embedding_model=KeywordEmbeddingModel()).select(
         "How should EDL route to the expert pool?",
         experts,
     )
@@ -92,6 +111,7 @@ def test_attention_router_returns_softmax_distribution() -> None:
     assert route.probability == max(probabilities)
 
 
+# Verifies batch ordering with inference embeddings and model completion explicitly mocked.
 def test_edl_batch_dispatch_returns_responses_in_request_order() -> None:
     service = build_service()
     request = BatchDispatchRequest(
@@ -117,6 +137,7 @@ def test_edl_batch_dispatch_returns_responses_in_request_order() -> None:
     assert len(response.responses) == 2
 
 
+# Verifies concurrent dispatch while inference embeddings and expert execution are mocked.
 def test_edl_batch_dispatch_runs_expert_instances_concurrently() -> None:
     class MeasuringRunner:
         def __init__(self) -> None:
@@ -146,7 +167,7 @@ def test_edl_batch_dispatch_runs_expert_instances_concurrently() -> None:
             repo_root=ROOT,
             experts_path=ROOT / "memory" / "graph" / "experts.yaml",
         ),
-        router=AttentionRouter(),
+        router=AttentionRouter(embedding_model=KeywordEmbeddingModel()),
         runner=runner,
         max_dispatch_concurrency=3,
     )

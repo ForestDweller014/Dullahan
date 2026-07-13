@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 import yaml
-
 from dullahan_kg.graph import GraphCluster, KnowledgeGraph
 from dullahan_kg.storage.yaml_graph_store import YamlGraphStore
 from dullahan_shared.schemas.graph import EdgeType, GraphEdge, GraphNode, NodeType
@@ -11,7 +10,10 @@ from graph_builder.experts import generate_experts_from_clusters
 from graph_builder.graphify import GraphifyConfig, import_graphify_json
 from world_state import LocalWorldStateDB
 
+from testing_fakes import KeywordEmbeddingModel
 
+
+# Verifies that cluster generation rewrites clusters.yaml with K-bounded assignments.
 def test_generate_clusters_updates_clusters_yaml(tmp_path: Path) -> None:
     graph_dir = tmp_path / "graph"
     store = YamlGraphStore(graph_dir)
@@ -40,6 +42,7 @@ def test_generate_clusters_updates_clusters_yaml(tmp_path: Path) -> None:
     assert all(len(cluster.node_ids) <= 2 for cluster in graph.clusters.values())
 
 
+# Verifies that generate experts from clusters writes registry and role docs.
 def test_generate_experts_from_clusters_writes_registry_and_role_docs(tmp_path: Path) -> None:
     graph_dir = tmp_path / "memory" / "graph"
     store = YamlGraphStore(graph_dir)
@@ -68,6 +71,7 @@ def test_generate_experts_from_clusters_writes_registry_and_role_docs(tmp_path: 
     assert "concept:a" in role_context_path.read_text(encoding="utf-8")
 
 
+# Verifies that generate experts from clusters preserves existing role context path.
 def test_generate_experts_from_clusters_preserves_existing_role_context_path(
     tmp_path: Path,
 ) -> None:
@@ -101,6 +105,7 @@ def test_generate_experts_from_clusters_preserves_existing_role_context_path(
     )
 
 
+# Verifies Graphify import while the external semantic embedder is explicitly mocked.
 def test_import_graphify_json_builds_clusters_and_experts(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     graphify_json = tmp_path / "graphify-out" / "graph.json"
@@ -155,12 +160,19 @@ def test_import_graphify_json_builds_clusters_and_experts(tmp_path: Path) -> Non
             k=2,
         ),
         graphify_json_path=graphify_json,
+        embedding_model=KeywordEmbeddingModel(),
     )
 
     graph_yaml = repo_root / "memory" / "graph" / "graph.yaml"
     clusters_yaml = repo_root / "memory" / "graph" / "clusters.yaml"
     experts_yaml = repo_root / "memory" / "graph" / "experts.yaml"
-    index_path = repo_root / "memory" / "world_state" / "indexes" / "local.json"
+    index_path = (
+        repo_root
+        / "memory"
+        / "world_state"
+        / "indexes"
+        / "local.test_keyword_embedding.json"
+    )
 
     assert graph_yaml.exists()
     assert clusters_yaml.exists()
@@ -182,5 +194,6 @@ def test_import_graphify_json_builds_clusters_and_experts(tmp_path: Path) -> Non
     world_state = LocalWorldStateDB.from_graph_memory(
         repo_root=repo_root,
         graph_dir=repo_root / "memory" / "graph",
+        embedding_model=KeywordEmbeddingModel(),
     )
     assert world_state.search("duration curve", top_k=1)

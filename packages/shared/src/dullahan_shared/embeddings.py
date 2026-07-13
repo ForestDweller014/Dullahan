@@ -1,34 +1,88 @@
 from __future__ import annotations
 
-import hashlib
+import json
 import math
-import re
+from typing import Protocol
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 
-TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9_]+")
+class EmbeddingError(RuntimeError):
+    pass
 
 
-class HashingEmbeddingModel:
-    def __init__(self, dimensions: int = 128) -> None:
+class EmbeddingModel(Protocol):
+    model_id: str
+    dimensions: int
+
+    def embed(self, text: str) -> list[float]: ...
+
+    def embed_many(self, texts: list[str]) -> list[list[float]]: ...
+
+
+class OpenAICompatibleEmbeddingModel:
+    """Semantic embedding client for the Dullahan inference boundary."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        model: str,
+        dimensions: int,
+        timeout_seconds: float = 120.0,
+    ) -> None:
         if dimensions <= 0:
             raise ValueError("embedding dimensions must be positive")
+        self.base_url = base_url.rstrip("/")
+        self.model_id = model
         self.dimensions = dimensions
+        self.timeout_seconds = timeout_seconds
 
     def embed(self, text: str) -> list[float]:
-        vector = [0.0] * self.dimensions
-        for token in TOKEN_PATTERN.findall(text.lower()):
-            digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
-            bucket = int.from_bytes(digest[:4], "big") % self.dimensions
-            sign = 1.0 if int.from_bytes(digest[4:], "big") % 2 == 0 else -1.0
-            vector[bucket] += sign
-        return self._normalize(vector)
+        return self.embed_many([text])[0]
 
-    def _normalize(self, vector: list[float]) -> list[float]:
-        norm = math.sqrt(sum(value * value for value in vector))
-        if norm == 0:
-            return vector
-        return [value / norm for value in vector]
+    def embed_many(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        request = Request(
+            f"{self.base_url}/embeddings",
+            data=json.dumps({"model": self.model_id, "input": texts}).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise EmbeddingError(
+                f"embedding provider failed with HTTP {exc.code}: {detail}"
+            ) from exc
+        except URLError as exc:
+            raise EmbeddingError(f"embedding provider request failed: {exc.reason}") from exc
+
+        rows = sorted(payload.get("data", []), key=lambda item: int(item.get("index", 0)))
+        embeddings = [list(map(float, row.get("embedding", []))) for row in rows]
+        if len(embeddings) != len(texts):
+            raise EmbeddingError(
+                f"embedding provider returned {len(embeddings)} vectors for {len(texts)} inputs"
+            )
+        if any(len(vector) != self.dimensions for vector in embeddings):
+            actual = sorted({len(vector) for vector in embeddings})
+            raise EmbeddingError(
+                f"embedding dimensions {actual} do not match configured {self.dimensions}"
+            )
+        return embeddings
 
 
 def cosine_similarity(left: list[float], right: list[float]) -> float:
-    return sum(left_value * right_value for left_value, right_value in zip(left, right))
+    if len(left) != len(right):
+        raise ValueError("embedding dimensions must match")
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if left_norm == 0 or right_norm == 0:
+        return 0.0
+    score = sum(a * b for a, b in zip(left, right, strict=True)) / (
+        left_norm * right_norm
+    )
+    return max(-1.0, min(1.0, score))

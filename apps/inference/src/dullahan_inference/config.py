@@ -105,6 +105,19 @@ class OllamaConfig(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
 
 
+class EmbeddingConfig(BaseModel):
+    model: str = "qwen3-embedding:0.6b"
+    dimensions: int = Field(default=1024, gt=0)
+    keep_alive: str = "10m"
+    truncate: bool = False
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
+class TokenizerConfig(BaseModel):
+    model: str = "Qwen/Qwen3-8B"
+    add_special_tokens: bool = False
+
+
 class InferenceServerConfig(BaseModel):
     host: str = "0.0.0.0"
     advertised_host: str = "127.0.0.1"
@@ -146,13 +159,15 @@ class ModelServerConfig(BaseModel):
 
 
 class InferenceConfig(BaseModel):
-    provider: InferenceProvider = InferenceProvider.QWEN
+    provider: InferenceProvider = InferenceProvider.OLLAMA
     device: DevicePreference = DevicePreference.AUTO
     quantization: QuantizationMode = QuantizationMode.AUTO
     models: ModelCatalogConfig = Field(default_factory=ModelCatalogConfig)
     offload: OffloadConfig = Field(default_factory=OffloadConfig)
     vllm: VllmConfig = Field(default_factory=VllmConfig)
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
+    embeddings: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
+    tokenizer: TokenizerConfig = Field(default_factory=TokenizerConfig)
     model_server: ModelServerConfig = Field(default_factory=ModelServerConfig)
     server: InferenceServerConfig = Field(default_factory=InferenceServerConfig)
 

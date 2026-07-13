@@ -30,33 +30,6 @@ class ModelProviderError(RuntimeError):
     pass
 
 
-class DeterministicLocalSlmProvider(ModelProvider):
-    """Local deterministic stand-in for an SLM serving backend."""
-
-    def complete(self, request: ModelRequest) -> ModelResult:
-        lines = [line.strip() for line in request.prompt.splitlines() if line.strip()]
-        subquery = self._extract_section(lines, "Subquery:")
-        context = self._extract_section(lines, "Context:")
-        response = (
-            f"Model {request.model} answered '{subquery}' using "
-            f"{context or 'no supplied context'}"
-        )
-        return ModelResult(
-            text=response[: request.max_tokens * 4],
-            provider="deterministic-local-slm",
-            token_count=len(response.split()),
-        )
-
-    def _extract_section(self, lines: list[str], marker: str) -> str:
-        try:
-            index = lines.index(marker)
-        except ValueError:
-            return ""
-        if index + 1 >= len(lines):
-            return ""
-        return lines[index + 1]
-
-
 class OpenAICompatibleHttpProvider(ModelProvider):
     """HTTP provider for OpenAI-compatible completion APIs, including SGLang."""
 
@@ -91,7 +64,11 @@ class OpenAICompatibleHttpProvider(ModelProvider):
         data = json.loads(response_body)
         text = self._extract_text(data)
         usage = data.get("usage", {})
-        token_count = usage.get("completion_tokens") or len(text.split())
+        token_count = usage.get("completion_tokens")
+        if not isinstance(token_count, int) or token_count < 0:
+            raise ModelProviderError(
+                "model provider response contained no native completion token usage"
+            )
         return ModelResult(
             text=text,
             provider="openai-compatible-http",

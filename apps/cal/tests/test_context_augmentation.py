@@ -6,22 +6,30 @@ from cal.context.budget import estimate_tokens
 from cal.service import ContextAugmentationService
 from dullahan_shared.schemas.context import ContextBundle, ContextDocument, ContextSource
 
+from testing_fakes import KeywordEmbeddingModel, WhitespaceTokenCounter
 
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def build_service() -> ContextAugmentationService:
+TOKEN_COUNTER = WhitespaceTokenCounter()
+
+
+def build_service(tmp_path: Path) -> ContextAugmentationService:
     return ContextAugmentationService.from_config(
         CalConfig(
             repo_root=ROOT,
+            world_state_index_path=tmp_path / "world-state.json",
             parent_top_k=2,
             world_top_k=3,
             token_budget=2048,
-        )
+        ),
+        embedding_model=KeywordEmbeddingModel(),
+        token_counter=TOKEN_COUNTER,
     )
 
 
-def test_cal_merges_parent_and_graph_context() -> None:
+# Verifies CAL merging while inference embeddings and tokenization are explicitly mocked.
+def test_cal_merges_parent_and_graph_context(tmp_path: Path) -> None:
     parent_context = ContextBundle(
         query_id="query:root",
         documents=[
@@ -44,7 +52,7 @@ def test_cal_merges_parent_and_graph_context() -> None:
         parent_context=parent_context,
     )
 
-    response = build_service().augment(request)
+    response = build_service(tmp_path).augment(request)
     document_ids = {document.id for document in response.context.documents}
 
     assert response.subquery == request.subquery
@@ -56,10 +64,14 @@ def test_cal_merges_parent_and_graph_context() -> None:
         "selected_token_count"
     ]
     assert "context_reduction_percent" in response.context.metadata
-    assert estimate_tokens(response.context.documents) <= response.context.token_budget
+    assert (
+        estimate_tokens(response.context.documents, token_counter=TOKEN_COUNTER)
+        <= response.context.token_budget
+    )
 
 
-def test_cal_enforces_context_token_budget() -> None:
+# Verifies CAL budgeting while inference embeddings and tokenization are explicitly mocked.
+def test_cal_enforces_context_token_budget(tmp_path: Path) -> None:
     parent_context = ContextBundle(
         query_id="query:root",
         documents=[
@@ -73,10 +85,13 @@ def test_cal_enforces_context_token_budget() -> None:
     service = ContextAugmentationService.from_config(
         CalConfig(
             repo_root=ROOT,
+            world_state_index_path=tmp_path / "world-state.json",
             parent_top_k=1,
             world_top_k=0,
             token_budget=5,
-        )
+        ),
+        embedding_model=KeywordEmbeddingModel(),
+        token_counter=TOKEN_COUNTER,
     )
 
     response = service.augment(
@@ -87,11 +102,12 @@ def test_cal_enforces_context_token_budget() -> None:
         )
     )
 
-    assert estimate_tokens(response.context.documents) <= 5
+    assert estimate_tokens(response.context.documents, token_counter=TOKEN_COUNTER) <= 5
     assert response.context.documents[0].metadata["truncated"] is True
 
 
-def test_cal_returns_empty_context_when_no_documents_match() -> None:
+# Verifies empty retrieval while inference embeddings and tokenization are explicitly mocked.
+def test_cal_returns_empty_context_when_no_documents_match(tmp_path: Path) -> None:
     parent_context = ContextBundle(
         query_id="query:root",
         documents=[
@@ -108,12 +124,13 @@ def test_cal_returns_empty_context_when_no_documents_match() -> None:
         parent_context=parent_context,
     )
 
-    response = build_service().augment(request)
+    response = build_service(tmp_path).augment(request)
 
     assert response.context.documents == []
 
 
-def test_cal_batch_augmentation_preserves_request_order() -> None:
+# Verifies CAL batch ordering while inference embeddings and tokenization are explicitly mocked.
+def test_cal_batch_augmentation_preserves_request_order(tmp_path: Path) -> None:
     parent_context = ContextBundle(
         query_id="query:root",
         documents=[
@@ -130,7 +147,7 @@ def test_cal_batch_augmentation_preserves_request_order() -> None:
         ],
     )
 
-    response = build_service().augment_batch(
+    response = build_service(tmp_path).augment_batch(
         BatchAugmentContextRequest(
             requests=[
                 AugmentContextRequest(

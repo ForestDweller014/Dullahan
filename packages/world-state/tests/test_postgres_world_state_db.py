@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import pytest
-
-from dullahan_shared.embeddings import HashingEmbeddingModel
 from dullahan_shared.schemas.context import ContextDocument, ContextSource
 from world_state.postgres import (
     PostgresWorldStateConfig,
     PostgresWorldStateDB,
     _to_pgvector,
 )
+
+from testing_fakes import KeywordEmbeddingModel
 
 
 class FakeDocumentSource:
@@ -44,6 +44,9 @@ class FakeCursor:
     def fetchall(self) -> list[tuple]:
         return self.rows
 
+    def fetchone(self) -> tuple | None:
+        return self.rows[0] if self.rows else None
+
 
 class FakeConnection:
     def __init__(self, cursor: FakeCursor) -> None:
@@ -63,8 +66,9 @@ class FakeConnection:
         self.commit_count += 1
 
 
+# Verifies pgvector query behavior with the external semantic embedder explicitly mocked.
 def test_postgres_world_state_search_uses_pgvector_similarity() -> None:
-    schema_cursor = FakeCursor()
+    schema_cursor = FakeCursor(rows=[(f"vector({KeywordEmbeddingModel.dimensions})",)])
     search_cursor = FakeCursor(
         rows=[
             (
@@ -79,9 +83,12 @@ def test_postgres_world_state_search_uses_pgvector_similarity() -> None:
     connections = [FakeConnection(schema_cursor), FakeConnection(search_cursor)]
 
     db = PostgresWorldStateDB(
-        config=PostgresWorldStateConfig(dsn="postgresql://example/db"),
+        config=PostgresWorldStateConfig(
+            dsn="postgresql://example/db",
+            dimensions=KeywordEmbeddingModel.dimensions,
+        ),
         document_source=FakeDocumentSource(),
-        embedding_model=HashingEmbeddingModel(),
+        embedding_model=KeywordEmbeddingModel(),
         connect=lambda _dsn: connections.pop(0),
     )
 
@@ -93,15 +100,19 @@ def test_postgres_world_state_search_uses_pgvector_similarity() -> None:
     assert "embedding <=>" in search_cursor.executed[0][0]
 
 
+# Verifies pgvector rebuild behavior with the external semantic embedder explicitly mocked.
 def test_postgres_world_state_rebuild_writes_graph_documents_to_pgvector() -> None:
-    schema_cursor = FakeCursor()
+    schema_cursor = FakeCursor(rows=[(f"vector({KeywordEmbeddingModel.dimensions})",)])
     rebuild_cursor = FakeCursor()
     connections = [FakeConnection(schema_cursor), FakeConnection(rebuild_cursor)]
 
     db = PostgresWorldStateDB(
-        config=PostgresWorldStateConfig(dsn="postgresql://example/db"),
+        config=PostgresWorldStateConfig(
+            dsn="postgresql://example/db",
+            dimensions=KeywordEmbeddingModel.dimensions,
+        ),
         document_source=FakeDocumentSource(),
-        embedding_model=HashingEmbeddingModel(),
+        embedding_model=KeywordEmbeddingModel(),
         connect=lambda _dsn: connections.pop(0),
     )
 
@@ -112,20 +123,41 @@ def test_postgres_world_state_rebuild_writes_graph_documents_to_pgvector() -> No
     sql, params = rebuild_cursor.executemany_calls[0]
     assert "INSERT INTO world_state_documents" in sql
     assert params[0][0] == "world-node-doc:alpha"
-    assert params[0][4].startswith("[")
+    assert params[0][4] == KeywordEmbeddingModel.model_id
+    assert params[0][5].startswith("[")
 
 
+# Verifies stale pgvector dimensions are rejected before semantic search proceeds.
+def test_postgres_world_state_rejects_stale_embedding_dimensions() -> None:
+    schema_cursor = FakeCursor(rows=[("vector(128)",)])
+    db = PostgresWorldStateDB(
+        config=PostgresWorldStateConfig(
+            dsn="postgresql://example/db",
+            dimensions=KeywordEmbeddingModel.dimensions,
+        ),
+        document_source=FakeDocumentSource(),
+        embedding_model=KeywordEmbeddingModel(),
+        connect=lambda _dsn: FakeConnection(schema_cursor),
+    )
+
+    with pytest.raises(RuntimeError, match="Rebuild the WorldStateDB table"):
+        db.ensure_schema()
+
+
+# Verifies that PostgreSQL world state rejects unsafe table names.
 def test_postgres_world_state_rejects_unsafe_table_names() -> None:
     with pytest.raises(ValueError, match="table name"):
         PostgresWorldStateDB(
             config=PostgresWorldStateConfig(
                 dsn="postgresql://example/db",
                 table_name="world_state_documents; drop table users",
+                dimensions=KeywordEmbeddingModel.dimensions,
             ),
             document_source=FakeDocumentSource(),
-            embedding_model=HashingEmbeddingModel(),
+            embedding_model=KeywordEmbeddingModel(),
         )
 
 
+# Verifies that pgvector literal formats embedding for sql cast.
 def test_pgvector_literal_formats_embedding_for_sql_cast() -> None:
     assert _to_pgvector([0.5, -0.25]) == "[0.50000000,-0.25000000]"

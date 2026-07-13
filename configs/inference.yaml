@@ -1,5 +1,6 @@
-# qwen starts a vLLM OpenAI-compatible server; ollama starts a compatibility proxy.
-provider: qwen
+# Ollama provides completions, semantic embeddings, and native tokenizer usage.
+# Set qwen to launch a generation-only vLLM server instead.
+provider: ollama
 
 # auto selects CUDA, Apple Metal, or CPU based on available hardware.
 device: auto
@@ -59,6 +60,20 @@ ollama:
   think: false
   num_gpu: null
   options: {}
+
+# Dedicated semantic embedding model served by the same Ollama process and device policy.
+embeddings:
+  model: qwen3-embedding:0.6b
+  dimensions: 1024
+  keep_alive: 10m
+  # Fail instead of silently truncating documents before vectorization.
+  truncate: false
+  options: {}
+
+# Exact generation-model tokenizer used for CAL context budgets.
+tokenizer:
+  model: Qwen/Qwen3-8B
+  add_special_tokens: false
 
 # Set enabled=true to use one of the two Docker model-server variants instead
 # of launching vLLM directly. device=auto/cpu/cuda selects this target too.

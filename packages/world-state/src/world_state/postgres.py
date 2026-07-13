@@ -4,12 +4,11 @@ import json
 import re
 from collections.abc import Callable
 
+from dullahan_shared.embeddings import EmbeddingModel
+from dullahan_shared.schemas.context import ContextDocument, ContextSource
 from pydantic import BaseModel, Field
 
-from dullahan_shared.embeddings import HashingEmbeddingModel
-from dullahan_shared.schemas.context import ContextDocument, ContextSource
 from world_state.graph_documents import GraphDocumentSource
-
 
 TABLE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$")
 
@@ -17,7 +16,7 @@ TABLE_NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_
 class PostgresWorldStateConfig(BaseModel):
     dsn: str = Field(min_length=1)
     table_name: str = "world_state_documents"
-    dimensions: int = Field(default=128, gt=0)
+    dimensions: int = Field(default=1024, gt=0)
 
 
 class PostgresWorldStateDB:
@@ -28,12 +27,14 @@ class PostgresWorldStateDB:
         *,
         config: PostgresWorldStateConfig,
         document_source: GraphDocumentSource,
-        embedding_model: HashingEmbeddingModel,
+        embedding_model: EmbeddingModel,
         connect: Callable[..., object] | None = None,
     ) -> None:
         self.config = config
         self.document_source = document_source
         self.embedding_model = embedding_model
+        if config.dimensions != embedding_model.dimensions:
+            raise ValueError("PostgreSQL vector dimensions must match the embedding model")
         self._connect = connect
         self._table_name = _validate_table_name(config.table_name)
 
@@ -45,9 +46,8 @@ class PostgresWorldStateDB:
         repo_root,
         graph_dir,
         table_name: str = "world_state_documents",
-        dimensions: int = 128,
+        embedding_model: EmbeddingModel,
     ) -> PostgresWorldStateDB:
-        embedding_model = HashingEmbeddingModel(dimensions=dimensions)
         return cls(
             config=PostgresWorldStateConfig(
                 dsn=dsn,
@@ -71,10 +71,16 @@ class PostgresWorldStateDB:
                         "SELECT id, source, text, metadata, "
                         "GREATEST(0, 1 - (embedding <=> %s::vector)) AS score "
                         f"FROM {self._table_name} "
+                        "WHERE embedding_model_id = %s "
                         "ORDER BY embedding <=> %s::vector "
                         "LIMIT %s"
                     ),
-                    (query_vector, query_vector, top_k),
+                    (
+                        query_vector,
+                        self.embedding_model.model_id,
+                        query_vector,
+                        top_k,
+                    ),
                 )
                 rows = cursor.fetchall()
 
@@ -97,14 +103,17 @@ class PostgresWorldStateDB:
     def rebuild_index(self) -> int:
         self.ensure_schema()
         documents = self.document_source.load_documents()
+        embeddings = self.embedding_model.embed_many(
+            [document.text for document in documents]
+        )
         with self._connect_to_postgres() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(f"DELETE FROM {self._table_name}")
                 cursor.executemany(
                     (
                         f"INSERT INTO {self._table_name} "
-                        "(id, source, text, metadata, embedding) "
-                        "VALUES (%s, %s, %s, %s::jsonb, %s::vector)"
+                        "(id, source, text, metadata, embedding_model_id, embedding) "
+                        "VALUES (%s, %s, %s, %s::jsonb, %s, %s::vector)"
                     ),
                     [
                         (
@@ -112,9 +121,14 @@ class PostgresWorldStateDB:
                             document.source.value,
                             document.text,
                             json.dumps(document.metadata, sort_keys=True),
-                            _to_pgvector(self.embedding_model.embed(document.text)),
+                            self.embedding_model.model_id,
+                            _to_pgvector(embedding),
                         )
-                        for document in documents
+                        for document, embedding in zip(
+                            documents,
+                            embeddings,
+                            strict=True,
+                        )
                     ],
                 )
             connection.commit()
@@ -125,22 +139,41 @@ class PostgresWorldStateDB:
             with connection.cursor() as cursor:
                 cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
                 cursor.execute(
-                    (
-                        f"CREATE TABLE IF NOT EXISTS {self._table_name} ("
-                        "id text PRIMARY KEY, "
-                        "source text NOT NULL, "
-                        "text text NOT NULL, "
-                        "metadata jsonb NOT NULL DEFAULT '{}'::jsonb, "
-                        f"embedding vector({self.embedding_model.dimensions}) NOT NULL"
-                        ")"
-                    )
+                    f"CREATE TABLE IF NOT EXISTS {self._table_name} ("
+                    "id text PRIMARY KEY, "
+                    "source text NOT NULL, "
+                    "text text NOT NULL, "
+                    "metadata jsonb NOT NULL DEFAULT '{}'::jsonb, "
+                    "embedding_model_id text NOT NULL, "
+                    f"embedding vector({self.embedding_model.dimensions}) NOT NULL"
+                    ")"
+                )
+                cursor.execute(
+                    f"ALTER TABLE {self._table_name} "
+                    "ADD COLUMN IF NOT EXISTS embedding_model_id text"
                 )
                 cursor.execute(
                     (
-                        f"CREATE INDEX IF NOT EXISTS {_index_name(self._table_name)} "
-                        f"ON {self._table_name} USING ivfflat "
-                        "(embedding vector_cosine_ops)"
+                        "SELECT format_type(attribute.atttypid, attribute.atttypmod) "
+                        "FROM pg_attribute AS attribute "
+                        "WHERE attribute.attrelid = %s::regclass "
+                        "AND attribute.attname = 'embedding' "
+                        "AND NOT attribute.attisdropped"
+                    ),
+                    (self._table_name,),
+                )
+                dimension_row = cursor.fetchone()
+                expected_type = f"vector({self.embedding_model.dimensions})"
+                if not dimension_row or dimension_row[0] != expected_type:
+                    actual_type = dimension_row[0] if dimension_row else "missing"
+                    raise RuntimeError(
+                        f"PostgreSQL embedding column is {actual_type}; expected "
+                        f"{expected_type}. Rebuild the WorldStateDB table."
                     )
+                cursor.execute(
+                    f"CREATE INDEX IF NOT EXISTS {_index_name(self._table_name)} "
+                    f"ON {self._table_name} USING ivfflat "
+                    "(embedding vector_cosine_ops)"
                 )
             connection.commit()
 

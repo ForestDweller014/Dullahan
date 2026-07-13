@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from dullahan_shared.schemas.expert import ExpertProfile, ExpertResponse
+
 from edl.api.schemas import DispatchRequest
 from edl.dispatch.attention_router import ExpertRoute
 from edl.execution.model_provider import ModelProvider, ModelRequest
 from edl.execution.prompt import ExpertPromptBuilder
-from dullahan_shared.schemas.expert import ExpertProfile, ExpertResponse
 
 
 class ExpertRunner:
@@ -13,17 +14,25 @@ class ExpertRunner:
         *,
         prompt_builder: ExpertPromptBuilder,
         model_provider: ModelProvider,
+        max_tokens: int = 512,
     ) -> None:
         self.prompt_builder = prompt_builder
         self.model_provider = model_provider
+        self.max_tokens = max_tokens
 
-    def run(self, request: DispatchRequest, expert: ExpertProfile, route: ExpertRoute) -> ExpertResponse:
+    def run(
+        self,
+        request: DispatchRequest,
+        expert: ExpertProfile,
+        route: ExpertRoute,
+    ) -> ExpertResponse:
         cited_document_ids = [document.id for document in request.context.documents[:5]]
         prompt = self.prompt_builder.build(request, expert)
         model_result = self.model_provider.complete(
             ModelRequest(
                 model=expert.model,
                 prompt=prompt,
+                max_tokens=self.max_tokens,
             )
         )
 

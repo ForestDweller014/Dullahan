@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from math import exp
 
-from pydantic import BaseModel, Field
-
-from dullahan_shared.embeddings import HashingEmbeddingModel, cosine_similarity
+from dullahan_shared.embeddings import EmbeddingModel, cosine_similarity
 from dullahan_shared.schemas.expert import ExpertProfile
+from pydantic import BaseModel, Field
 
 
 class ExpertAttentionScore(BaseModel):
@@ -24,35 +23,45 @@ class ExpertRoute(BaseModel):
 class AttentionRouter:
     def __init__(
         self,
-        embedding_model: HashingEmbeddingModel | None = None,
+        embedding_model: EmbeddingModel,
         min_score_threshold: float = 0.0,
     ) -> None:
-        self.embedding_model = embedding_model or HashingEmbeddingModel()
+        self.embedding_model = embedding_model
         self.min_score_threshold = min_score_threshold
 
     def select(self, subquery: str, experts: list[ExpertProfile]) -> ExpertRoute:
         if not experts:
             raise ValueError("cannot route without registered experts")
 
-        subquery_embedding = self.embedding_model.embed(subquery)
+        embeddings = self.embedding_model.embed_many(
+            [subquery, *[expert.role_context for expert in experts]]
+        )
+        subquery_embedding = embeddings[0]
         raw_scores = {
             expert.id: max(
                 0.0,
                 cosine_similarity(
                     subquery_embedding,
-                    self.embedding_model.embed(expert.role_context),
+                    expert_embedding,
                 ),
             )
-            for expert in experts
+            for expert, expert_embedding in zip(experts, embeddings[1:], strict=True)
         }
 
         distribution = self._softmax(raw_scores)
-        selected_score = max(distribution, key=lambda score: (score.probability, score.raw_score, score.expert_id))
-        selected_expert = next(expert for expert in experts if expert.id == selected_score.expert_id)
+        selected_score = max(
+            distribution,
+            key=lambda score: (score.probability, score.raw_score, score.expert_id),
+        )
+        selected_expert = next(
+            expert for expert in experts if expert.id == selected_score.expert_id
+        )
 
         if selected_score.raw_score < self.min_score_threshold:
             selected_expert = sorted(experts, key=lambda expert: expert.id)[0]
-            selected_score = next(score for score in distribution if score.expert_id == selected_expert.id)
+            selected_score = next(
+                score for score in distribution if score.expert_id == selected_expert.id
+            )
 
         return ExpertRoute(
             expert=selected_expert,

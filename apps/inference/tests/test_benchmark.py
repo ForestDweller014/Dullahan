@@ -38,15 +38,18 @@ def run(*, latency: float, throughput: float, cold: bool = False) -> BenchmarkRu
     )
 
 
+# Verifies that tokens per second uses native nanosecond duration.
 def test_tokens_per_second_uses_native_nanosecond_duration() -> None:
     assert tokens_per_second(25, 500_000_000) == 50
     assert tokens_per_second(25, 0) == 0
 
 
+# Verifies that percentile uses nearest rank.
 def test_percentile_uses_nearest_rank() -> None:
     assert percentile([1, 2, 3, 4], 0.95) == 4
 
 
+# Verifies that summary excludes cold start from warm metrics.
 def test_summary_excludes_cold_start_from_warm_metrics() -> None:
     summary = summarize_runs(
         [run(latency=20, throughput=1, cold=True), run(latency=2, throughput=10)]
@@ -58,6 +61,7 @@ def test_summary_excludes_cold_start_from_warm_metrics() -> None:
     assert summary["peak_system_used_increase_bytes"] == 1_000
 
 
+# Verifies that model metadata reports effective quantization density.
 def test_model_metadata_reports_effective_quantization_density(monkeypatch) -> None:
     def fake_request(url, payload=None, timeout=120):
         if url.endswith("/api/show"):

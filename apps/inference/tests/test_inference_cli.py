@@ -8,6 +8,7 @@ from dullahan_inference.cli import run_from_args
 from dullahan_inference.device import DeviceInventory
 
 
+# Verifies that plan command prints resolved configuration.
 def test_plan_command_prints_resolved_configuration(capsys) -> None:
     repo_root = Path(__file__).resolve().parents[3]
 
@@ -15,12 +16,13 @@ def test_plan_command_prints_resolved_configuration(capsys) -> None:
 
     payload = json.loads(capsys.readouterr().out)
     assert result == 0
-    assert payload["engine"] == "vllm"
+    assert payload["engine"] == "ollama"
     assert payload["quantization"] in {"gguf", "gptq"}
     assert payload["offload_enabled"] is True
     assert payload["quantization_bits"] == 4
 
 
+# Verifies that serve rejects a plan that cannot fit memory.
 def test_serve_rejects_a_plan_that_cannot_fit_memory(monkeypatch, tmp_path) -> None:
     config_path = tmp_path / "inference.yaml"
     config_path.write_text(

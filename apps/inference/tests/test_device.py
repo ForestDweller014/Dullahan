@@ -4,6 +4,7 @@ from dullahan_inference.config import DevicePreference
 from dullahan_inference.device import DeviceInventory, detect_device
 
 
+# Verifies that auto device falls back to CPU.
 def test_auto_device_falls_back_to_cpu(monkeypatch) -> None:
     monkeypatch.setattr("dullahan_inference.device._torch_cuda_inventory", lambda: None)
     monkeypatch.setattr("dullahan_inference.device._nvidia_smi_inventory", lambda: None)
@@ -15,6 +16,7 @@ def test_auto_device_falls_back_to_cpu(monkeypatch) -> None:
     assert inventory.detection_source == "fallback"
 
 
+# Verifies that explicit CUDA is preserved when detection is unavailable.
 def test_explicit_cuda_is_preserved_when_detection_is_unavailable(monkeypatch) -> None:
     monkeypatch.setattr("dullahan_inference.device._torch_cuda_inventory", lambda: None)
     monkeypatch.setattr("dullahan_inference.device._nvidia_smi_inventory", lambda: None)
@@ -26,10 +28,12 @@ def test_explicit_cuda_is_preserved_when_detection_is_unavailable(monkeypatch) -
     assert inventory.detection_source == "configured-unverified"
 
 
+# Verifies that device inventory normalizes string values.
 def test_device_inventory_normalizes_string_values() -> None:
     assert DeviceInventory(device="cuda").device == DevicePreference.CUDA
 
 
+# Verifies that auto device uses apple metal when available.
 def test_auto_device_uses_apple_metal_when_available(monkeypatch) -> None:
     metal = DeviceInventory(
         device="metal",

@@ -26,8 +26,10 @@ class FakeResponse:
         return b'{"active_model":"expert"}'
 
 
+# Verifies that container plan selects CPU endpoint and GGUF.
 def test_container_plan_selects_cpu_endpoint_and_gguf() -> None:
     config = InferenceConfig(
+        provider="qwen",
         model_server={"enabled": True, "model": "expert"},
     )
 
@@ -42,8 +44,10 @@ def test_container_plan_selects_cpu_endpoint_and_gguf() -> None:
     assert plan.api_base_url == "http://127.0.0.1:8001/v1"
 
 
+# Verifies that container plan selects CUDA endpoint and GPTQ.
 def test_container_plan_selects_cuda_endpoint_and_gptq() -> None:
     config = InferenceConfig(
+        provider="qwen",
         model_server={"enabled": True, "model": "expert"},
     )
 
@@ -57,8 +61,12 @@ def test_container_plan_selects_cuda_endpoint_and_gptq() -> None:
     assert plan.api_base_url == "http://127.0.0.1:8002/v1"
 
 
+# Verifies that model server activation uses admin token.
 def test_model_server_activation_uses_admin_token(monkeypatch) -> None:
-    config = InferenceConfig(model_server={"enabled": True, "model": "expert"})
+    config = InferenceConfig(
+        provider="qwen",
+        model_server={"enabled": True, "model": "expert"},
+    )
     plan = resolve_inference_plan(
         config,
         inventory=DeviceInventory(device="cpu"),
@@ -87,8 +95,9 @@ def test_model_server_activation_uses_admin_token(monkeypatch) -> None:
     assert result == {"active_model": "expert"}
 
 
+# Verifies that model server activation requires token.
 def test_model_server_activation_requires_token(monkeypatch) -> None:
-    config = InferenceConfig(model_server={"enabled": True})
+    config = InferenceConfig(provider="qwen", model_server={"enabled": True})
     plan = resolve_inference_plan(config, inventory=DeviceInventory(device="cpu"))
     monkeypatch.delenv("MODEL_ADMIN_TOKEN", raising=False)
 
@@ -96,8 +105,12 @@ def test_model_server_activation_requires_token(monkeypatch) -> None:
         activate_model_server(plan)
 
 
+# Verifies that model server metadata uses dedicated endpoint.
 def test_model_server_metadata_uses_dedicated_endpoint(monkeypatch) -> None:
-    config = InferenceConfig(model_server={"enabled": True, "model": "expert"})
+    config = InferenceConfig(
+        provider="qwen",
+        model_server={"enabled": True, "model": "expert"},
+    )
     plan = resolve_inference_plan(config, inventory=DeviceInventory(device="cpu"))
     monkeypatch.setenv("MODEL_ADMIN_TOKEN", "secret")
     captured = {}
@@ -116,11 +129,13 @@ def test_model_server_metadata_uses_dedicated_endpoint(monkeypatch) -> None:
     }
 
 
+# Verifies that lora_only export configuration is serialized into the model-server request.
 def test_lora_only_export_mode_flows_from_config_to_request(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     config = InferenceConfig(
+        provider="qwen",
         model_server={"enabled": True, "model": "expert", "export_mode": "lora_only"}
     )
     plan = resolve_inference_plan(config, inventory=DeviceInventory(device="cpu"))
@@ -148,8 +163,10 @@ def test_lora_only_export_mode_flows_from_config_to_request(
     assert plan.model_export_mode == "lora_only"
 
 
+# Verifies that model-server LoRA capacity arguments are preserved in the resolved plan.
 def test_model_server_lora_capacity_flows_to_plan() -> None:
     config = InferenceConfig(
+        provider="qwen",
         model_server={"enabled": True, "max_loras": 6, "max_cpu_loras": 12}
     )
 
@@ -159,6 +176,7 @@ def test_model_server_lora_capacity_flows_to_plan() -> None:
     assert plan.max_cpu_loras == 12
 
 
+# Verifies that model server rejects CPU LoRA cache below batch capacity.
 def test_model_server_rejects_cpu_lora_cache_below_batch_capacity() -> None:
     with pytest.raises(ValueError, match="max_cpu_loras"):
         InferenceConfig(model_server={"max_loras": 8, "max_cpu_loras": 4})

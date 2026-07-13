@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 
+from dullahan_shared.embeddings import EmbeddingModel, OpenAICompatibleEmbeddingModel
 from dullahan_shared.schemas.expert import ExpertProfile, ExpertResponse
+
 from edl.api.schemas import (
     BatchDispatchRequest,
     BatchDispatchResponse,
@@ -14,7 +16,6 @@ from edl.dispatch.attention_router import AttentionRouter
 from edl.dispatch.expert_registry import ExpertRegistry
 from edl.execution.expert_runner import ExpertRunner
 from edl.execution.model_provider import (
-    DeterministicLocalSlmProvider,
     ModelProvider,
     OpenAICompatibleHttpProvider,
 )
@@ -36,32 +37,42 @@ class ExpertDispatchService:
         self.max_dispatch_concurrency = max_dispatch_concurrency
 
     @classmethod
-    def from_config(cls, config: EdlConfig) -> ExpertDispatchService:
+    def from_config(
+        cls,
+        config: EdlConfig,
+        *,
+        model_provider: ModelProvider | None = None,
+        embedding_model: EmbeddingModel | None = None,
+    ) -> ExpertDispatchService:
         return cls(
             registry=ExpertRegistry(
                 repo_root=config.repo_root,
                 experts_path=config.resolved_experts_path,
             ),
             router=AttentionRouter(
+                embedding_model=embedding_model
+                or OpenAICompatibleEmbeddingModel(
+                    base_url=config.model_base_url,
+                    model=config.embedding_model,
+                    dimensions=config.embedding_dimensions,
+                    timeout_seconds=config.model_timeout_seconds,
+                ),
                 min_score_threshold=config.min_score_threshold,
             ),
             runner=ExpertRunner(
                 prompt_builder=ExpertPromptBuilder(),
-                model_provider=cls._build_model_provider(config),
+                model_provider=model_provider or cls._build_model_provider(config),
+                max_tokens=config.model_max_tokens,
             ),
             max_dispatch_concurrency=config.max_dispatch_concurrency,
         )
 
     @staticmethod
     def _build_model_provider(config: EdlConfig) -> ModelProvider:
-        if config.model_provider == "deterministic":
-            return DeterministicLocalSlmProvider()
-        if config.model_provider == "http":
-            return OpenAICompatibleHttpProvider(
-                base_url=config.model_base_url,
-                timeout_seconds=config.model_timeout_seconds,
-            )
-        raise ValueError(f"unknown EDL model provider: {config.model_provider}")
+        return OpenAICompatibleHttpProvider(
+            base_url=config.model_base_url,
+            timeout_seconds=config.model_timeout_seconds,
+        )
 
     def dispatch(self, request: DispatchRequest) -> DispatchResponse:
         experts = self.registry.load()

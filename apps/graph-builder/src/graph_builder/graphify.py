@@ -11,10 +11,12 @@ from typing import Any
 
 from dullahan_kg.graph import KnowledgeGraph
 from dullahan_kg.storage.yaml_graph_store import YamlGraphStore
+from dullahan_shared.embeddings import EmbeddingModel
 from dullahan_shared.schemas.graph import EdgeType, GraphEdge, GraphNode, NodeType
+from world_state import LocalWorldStateDB
+
 from graph_builder.cluster import generate_clusters
 from graph_builder.experts import generate_experts_from_clusters
-from world_state import LocalWorldStateDB
 
 
 @dataclass(frozen=True)
@@ -28,15 +30,24 @@ class GraphifyConfig:
     graphify_output_dir: Path | None = None
 
 
-def graphify_collection(config: GraphifyConfig) -> KnowledgeGraph:
+def graphify_collection(
+    config: GraphifyConfig,
+    *,
+    embedding_model: EmbeddingModel | None = None,
+) -> KnowledgeGraph:
     graphify_json_path = run_graphify(config)
-    return import_graphify_json(config=config, graphify_json_path=graphify_json_path)
+    return import_graphify_json(
+        config=config,
+        graphify_json_path=graphify_json_path,
+        embedding_model=embedding_model,
+    )
 
 
 def import_graphify_json(
     *,
     config: GraphifyConfig,
     graphify_json_path: Path,
+    embedding_model: EmbeddingModel | None = None,
 ) -> KnowledgeGraph:
     payload = _read_graphify_json(graphify_json_path)
     graph = _convert_graphify_payload(config=config, payload=payload)
@@ -49,6 +60,7 @@ def import_graphify_json(
     LocalWorldStateDB.from_graph_memory(
         repo_root=config.repo_root,
         graph_dir=config.graph_dir,
+        embedding_model=embedding_model,
     ).rebuild_index()
     return YamlGraphStore(config.graph_dir).load()
 
@@ -146,7 +158,9 @@ def main(argv: list[str] | None = None) -> int:
             export_dir=_resolve_under_repo(repo_root, args.postgres_export_dir),
         )
     if source_path is None and args.from_graphify_json is None:
-        raise SystemExit("collection is required unless --postgres-dsn or --from-graphify-json is set")
+        raise SystemExit(
+            "collection is required unless --postgres-dsn or --from-graphify-json is set"
+        )
 
     config = GraphifyConfig(
         source_path=source_path or repo_root,

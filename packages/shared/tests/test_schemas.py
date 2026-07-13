@@ -8,6 +8,7 @@ from dullahan_shared.schemas.graph import EdgeType, GraphEdge, GraphNode, NodeTy
 from dullahan_shared.schemas.query import QueryEnvelope
 
 
+# Verifies that query envelope accepts parent context.
 def test_query_envelope_accepts_parent_context() -> None:
     query_id = new_id("query")
     context = ContextBundle(
@@ -33,6 +34,7 @@ def test_query_envelope_accepts_parent_context() -> None:
     assert "CAL augments" in envelope.parent_context.text
 
 
+# Verifies that expert profile requires role context.
 def test_expert_profile_requires_role_context() -> None:
     with pytest.raises(ValidationError):
         ExpertProfile(
@@ -43,6 +45,7 @@ def test_expert_profile_requires_role_context() -> None:
         )
 
 
+# Verifies that graph edge requires non negative weight.
 def test_graph_edge_requires_non_negative_weight() -> None:
     source = GraphNode(id="concept:cal", type=NodeType.CONCEPT, title="CAL")
     target = GraphNode(id="concept:edl", type=NodeType.CONCEPT, title="EDL")
@@ -58,6 +61,7 @@ def test_graph_edge_requires_non_negative_weight() -> None:
     assert edge.weight == 0.8
 
 
+# Verifies that expert response omits context by contract.
 def test_expert_response_omits_context_by_contract() -> None:
     response = ExpertResponse(
         sender_id="agent:root",

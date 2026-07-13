@@ -1,3 +1,7 @@
-from dullahan_shared.embeddings import HashingEmbeddingModel, cosine_similarity
+from dullahan_shared.embeddings import (
+    EmbeddingModel,
+    OpenAICompatibleEmbeddingModel,
+    cosine_similarity,
+)
 
-__all__ = ["HashingEmbeddingModel", "cosine_similarity"]
+__all__ = ["EmbeddingModel", "OpenAICompatibleEmbeddingModel", "cosine_similarity"]

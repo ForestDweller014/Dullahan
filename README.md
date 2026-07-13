@@ -62,6 +62,13 @@ audited, replayed, or used for later distillation.
 
 ## Architecture
 
+Every architecture view uses the same palette: **purple** for agent orchestration,
+**teal** for context and retrieval, **orange** for expert dispatch, **red** for
+inference and model serving, **gold** for graph build and persistent memory,
+**blue** for CLI/MCP integration, and **slate** for external actors, shared
+contracts, and configuration. Connectors inherit the color of the module they
+leave, so ownership of each interaction remains visible across subsystem boundaries.
+
 ```mermaid
 flowchart TD
     User["Root query"] --> Runtime["Agent Runtime"]
@@ -77,6 +84,26 @@ flowchart TD
     Experts --> Inference["Local inference: Qwen/vLLM or Ollama"]
     Inference --> Runtime
     Runtime --> Artifacts["YAML + Markdown execution artifacts"]
+
+    class User external
+    class Runtime,Planner,Subqueries orchestration
+    class CAL,ParentContext,WorldStateDB,ContextBundle contextLayer
+    class EDL,Router,Experts dispatchLayer
+    class Inference inferenceLayer
+    class Artifacts memoryLayer
+
+    classDef external fill:#475569,stroke:#1E293B,color:#FFFFFF
+    classDef orchestration fill:#6D28D9,stroke:#4C1D95,color:#FFFFFF
+    classDef contextLayer fill:#0F766E,stroke:#115E59,color:#FFFFFF
+    classDef dispatchLayer fill:#C2410C,stroke:#9A3412,color:#FFFFFF
+    classDef inferenceLayer fill:#B91C1C,stroke:#7F1D1D,color:#FFFFFF
+    classDef memoryLayer fill:#A16207,stroke:#713F12,color:#FFFFFF
+
+    linkStyle 0 stroke:#64748B,stroke-width:2px
+    linkStyle 1,2,3,12 stroke:#7C3AED,stroke-width:2px
+    linkStyle 4,5,6,7 stroke:#0D9488,stroke-width:2px
+    linkStyle 8,9,10 stroke:#EA580C,stroke-width:2px
+    linkStyle 11 stroke:#DC2626,stroke-width:2px
 ```
 
 ### Expert Routing And Dispatch
@@ -125,6 +152,21 @@ flowchart TB
     Generation --> Response["ExpertResponse<br/>answer + citations + route confidence<br/>+ model/token metadata"]
 
     Service -. "batch: max_dispatch_concurrency workers" .-> Router
+
+    class Request orchestration
+    class Service,Registry,Profiles,Router,Similarity,Softmax,Threshold,TopExpert,Fallback,Gate,Prompt,Runner,Response dispatchLayer
+    class ExpertsYaml,RoleDocs memoryLayer
+    class EmbedClient,EmbeddingModel,Provider,Generation inferenceLayer
+
+    classDef orchestration fill:#6D28D9,stroke:#4C1D95,color:#FFFFFF
+    classDef dispatchLayer fill:#C2410C,stroke:#9A3412,color:#FFFFFF
+    classDef inferenceLayer fill:#B91C1C,stroke:#7F1D1D,color:#FFFFFF
+    classDef memoryLayer fill:#A16207,stroke:#713F12,color:#FFFFFF
+
+    linkStyle 0,6,18 stroke:#7C3AED,stroke-width:2px
+    linkStyle 1,4,5,7,8,11,12,13,14,15,16,17,19,20,23 stroke:#EA580C,stroke-width:2px
+    linkStyle 2,3 stroke:#CA8A04,stroke-width:2px
+    linkStyle 9,10,21,22 stroke:#DC2626,stroke-width:2px
 ```
 
 ### Inference Module
@@ -150,7 +192,8 @@ flowchart TB
         VllmCommand["Build vllm serve command<br/>quantization + tokenizer + swap<br/>GPU utilization + CPU offload + tensor parallel"]
         VllmProcess["Replace CLI process with vLLM"]
         VllmApi["OpenAI-compatible generation API<br/>default /v1 on port 30000"]
-        VllmCommand --> VllmProcess --> VllmApi
+        VllmCommand --> VllmProcess
+        VllmProcess --> VllmApi
     end
 
     subgraph OllamaPath["Ollama compatibility path"]
@@ -195,6 +238,25 @@ flowchart TB
     StableApi --> GenerationConsumers
     OllamaApi --> GenerationConsumers
     OllamaApi --> SemanticConsumers
+
+    class Config foundationLayer
+    class Command integrationLayer
+    class Load,Detect,Inventory,Quantize,Memory,Plan,Fit,VllmCommand,VllmProcess,VllmApi,OllamaApp,OllamaGenerate,OllamaEmbed,NativeTokenizer,OllamaApi,AdminClient,CpuManager,CudaManager,ManagedVllm,StableApi inferenceLayer
+    class HfHub,ModelStore memoryLayer
+    class GenerationConsumers orchestration
+    class SemanticConsumers contextLayer
+
+    classDef orchestration fill:#6D28D9,stroke:#4C1D95,color:#FFFFFF
+    classDef contextLayer fill:#0F766E,stroke:#115E59,color:#FFFFFF
+    classDef inferenceLayer fill:#B91C1C,stroke:#7F1D1D,color:#FFFFFF
+    classDef memoryLayer fill:#A16207,stroke:#713F12,color:#FFFFFF
+    classDef integrationLayer fill:#1D4ED8,stroke:#1E3A8A,color:#FFFFFF
+    classDef foundationLayer fill:#475569,stroke:#1E293B,color:#FFFFFF
+
+    linkStyle 0 stroke:#64748B,stroke-width:2px
+    linkStyle 1 stroke:#2563EB,stroke-width:2px
+    linkStyle 2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,21,22,23,24,25,26,27,28,29,30 stroke:#DC2626,stroke-width:2px
+    linkStyle 18,19,20 stroke:#CA8A04,stroke-width:2px
 ```
 
 ### Complete Project Architecture
@@ -270,7 +332,8 @@ flowchart TB
         ReferencePolicies["configs/local.yaml, retrieval.yaml,<br/>routing.yaml: reference policy examples<br/>(not loaded directly by the services)"]
     end
 
-    User --> AgentCli --> Runtime
+    User --> AgentCli
+    AgentCli --> Runtime
     RuntimeConfig -.-> Runtime
     Runtime --> Planner
     Runtime --> Guard
@@ -284,7 +347,9 @@ flowchart TB
     Cal -->|"bounded ContextBundle"| EdlTools
     EdlTools -->|"in-process call or HTTP :8200"| Edl
     ExpertMemory --> Router
-    Edl --> Router --> ExpertGate --> ExpertRunner
+    Edl --> Router
+    Router --> ExpertGate
+    ExpertGate --> ExpertRunner
     ExpertRunner -->|"ExpertResponse"| Runtime
     Runtime --> Aggregator
     Aggregator -->|"final response"| User
@@ -293,7 +358,8 @@ flowchart TB
     Cal -->|"embeddings + native tokenization"| Inference
     Router -->|"expert-role embeddings"| Inference
     ExpertRunner -->|"expert completion"| Inference
-    Runtime --> TraceStore --> ExecutionMemory
+    Runtime --> TraceStore
+    TraceStore --> ExecutionMemory
 
     InferenceConfig -.-> Inference
     ServiceConfig -.-> Cal
@@ -306,8 +372,10 @@ flowchart TB
     McpClient --> McpServers
     McpServers -. "reuses agent-runtime HTTP adapters" .-> CalTools
     McpServers -. "reuses agent-runtime HTTP adapters" .-> EdlTools
-    McpServers --> CalMcp -->|"HTTP"| Cal
-    McpServers --> EdlMcp -->|"HTTP"| Edl
+    McpServers --> CalMcp
+    CalMcp -->|"HTTP"| Cal
+    McpServers --> EdlMcp
+    EdlMcp -->|"HTTP"| Edl
 
     Corpus --> GraphBuilder
     SourcePostgres --> GraphBuilder
@@ -315,7 +383,8 @@ flowchart TB
     Graphify -->|"graphify-out/graph.json"| GraphBuilder
     GraphBuilder --> KgPackage
     KgPackage --> GraphMemory
-    GraphMemory --> ExpertGenerator --> ExpertMemory
+    GraphMemory --> ExpertGenerator
+    ExpertGenerator --> ExpertMemory
     GraphBuilder --> WorldIndexBuild
     KgPackage -.-> WorldIndexBuild
     WorldIndexBuild --> LocalIndex
@@ -326,6 +395,33 @@ flowchart TB
     Shared -.-> McpServers
     Shared -.-> WorldState
     Shared -.-> GraphBuilder
+
+    class User external
+    class AgentCli,McpClient,McpServers,CalMcp,EdlMcp integrationLayer
+    class Corpus,SourcePostgres,GraphBuilder,Graphify,KgPackage,ExpertGenerator,WorldIndexBuild,GraphMemory,ExpertMemory,LocalIndex,ExecutionMemory memoryLayer
+    class Runtime,Planner,Guard,CalTools,EdlTools,Aggregator,TraceStore orchestration
+    class Cal,WorldState,PgVector contextLayer
+    class Edl,Router,ExpertGate,ExpertRunner dispatchLayer
+    class Inference,Ollama,DirectVllm,ModelServer,ManagedVllm inferenceLayer
+    class Shared,RuntimeConfig,InferenceConfig,ServiceConfig,ReferencePolicies foundationLayer
+
+    classDef external fill:#475569,stroke:#1E293B,color:#FFFFFF
+    classDef orchestration fill:#6D28D9,stroke:#4C1D95,color:#FFFFFF
+    classDef contextLayer fill:#0F766E,stroke:#115E59,color:#FFFFFF
+    classDef dispatchLayer fill:#C2410C,stroke:#9A3412,color:#FFFFFF
+    classDef inferenceLayer fill:#B91C1C,stroke:#7F1D1D,color:#FFFFFF
+    classDef memoryLayer fill:#A16207,stroke:#713F12,color:#FFFFFF
+    classDef integrationLayer fill:#1D4ED8,stroke:#1E3A8A,color:#FFFFFF
+    classDef foundationLayer fill:#475569,stroke:#1E293B,color:#FFFFFF
+
+    linkStyle 0 stroke:#64748B,stroke-width:2px
+    linkStyle 1,35,36,37,38,39,40,41 stroke:#2563EB,stroke-width:2px
+    linkStyle 2,28,29,30,53,54,55,56,57,58 stroke:#64748B,stroke-width:2px
+    linkStyle 3,4,5,6,7,13,19,20,21,22,26,27 stroke:#7C3AED,stroke-width:2px
+    linkStyle 8,11,12,23 stroke:#0D9488,stroke-width:2px
+    linkStyle 15,16,17,18,24,25 stroke:#EA580C,stroke-width:2px
+    linkStyle 31,32,33,34 stroke:#DC2626,stroke-width:2px
+    linkStyle 9,10,14,42,43,44,45,46,47,48,49,50,51,52 stroke:#CA8A04,stroke-width:2px
 ```
 
 The key runtime contracts are:

@@ -79,6 +79,249 @@ flowchart TD
     Runtime --> Artifacts["YAML + Markdown execution artifacts"]
 ```
 
+### Expert Routing And Dispatch
+
+EDL loads the generated expert registry for each single or batch dispatch, scores
+the subquery against every expert's cluster-derived role context, and runs exactly
+one selected expert. Batch requests reuse the loaded registry and execute individual
+route-and-run operations concurrently while preserving request order.
+
+```mermaid
+flowchart TB
+    Request["DispatchRequest<br/>subquery + bounded ContextBundle"] --> Service["ExpertDispatchService<br/>/dispatch or /dispatch/batch"]
+
+    subgraph RegistryData["Generated expert memory"]
+        ExpertsYaml["memory/graph/experts.yaml<br/>expert ID, cluster, model, role path"]
+        RoleDocs["memory/documents/clusters/*.md<br/>cluster-specialized role context"]
+    end
+
+    Service --> Registry["ExpertRegistry.load()"]
+    ExpertsYaml --> Registry
+    RoleDocs --> Registry
+    Registry --> Profiles["ExpertProfile[]"]
+
+    Service --> Router["AttentionRouter.select()"]
+    Request --> Router
+    Profiles --> Router
+    Router --> EmbedClient["OpenAI-compatible embedding client"]
+    EmbedClient -->|"POST /v1/embeddings"| EmbeddingModel["Inference embedding model<br/>subquery + every role context"]
+    EmbeddingModel --> Similarity["Cosine similarity<br/>negative scores clamped to zero"]
+    Similarity --> Softmax["Softmax distribution<br/>over all registered experts"]
+    Softmax --> Threshold{"Best raw score meets<br/>minimum threshold?"}
+    Threshold -->|"yes"| TopExpert["Highest-probability expert"]
+    Threshold -->|"no"| Fallback["Deterministic fallback<br/>first expert by ID"]
+
+    TopExpert --> Prompt
+    Fallback --> Prompt
+    Request --> Prompt["ExpertPromptBuilder<br/>role + subquery + first 5 context docs"]
+    Prompt --> Runner["ExpertRunner"]
+    Runner --> Provider["OpenAICompatibleHttpProvider"]
+    Provider -->|"POST /v1/completions<br/>selected expert model alias"| Generation["Qwen via vLLM,<br/>model-server, or Ollama proxy"]
+    Generation --> Response["ExpertResponse<br/>answer + citations + route confidence<br/>+ model/token metadata"]
+
+    Service -. "batch: bounded ThreadPoolExecutor" .-> Router
+```
+
+### Inference Module
+
+The inference app first turns declarative policy into a concrete, inspectable
+`ResolvedInferencePlan`. Serving then follows one of three paths: a direct vLLM
+process, an OpenAI-compatible Ollama proxy, or one of the persistent Docker model
+servers. The default Ollama path exposes generation, embeddings, and native
+tokenization through one Dullahan endpoint.
+
+```mermaid
+flowchart TB
+    Config["configs/inference.yaml<br/>provider, device, quantization, models,<br/>offload, server, model-server policy"] --> Load["InferenceConfig validation"]
+    Command["dullahan-inference<br/>plan | serve | activate | metadata | export"] --> Load
+    Load --> Detect["detect_device()"]
+    Detect --> Inventory["DeviceInventory<br/>CUDA via torch/nvidia-smi<br/>then Apple Metal, then CPU"]
+    Inventory --> Quantize["Resolve quantization<br/>Ollama → GGUF<br/>Qwen CUDA → GPTQ<br/>Qwen CPU/Metal → GGUF"]
+    Quantize --> Memory["Memory planner<br/>estimate weights + runtime overhead<br/>reserve RAM and size per-GPU CPU offload"]
+    Memory --> Plan["ResolvedInferencePlan<br/>engine, model, endpoint, command,<br/>offload, memory_fit, notes"]
+    Plan --> Fit{"Serving mode"}
+
+    subgraph Direct["Direct Qwen / vLLM"]
+        VllmCommand["Build vllm serve command<br/>quantization + tokenizer + swap<br/>GPU utilization + CPU offload + tensor parallel"]
+        VllmProcess["Replace CLI process with vLLM"]
+        VllmApi["OpenAI-compatible generation API<br/>default /v1 on port 30000"]
+        VllmCommand --> VllmProcess --> VllmApi
+    end
+
+    subgraph OllamaPath["Ollama compatibility path"]
+        OllamaApp["FastAPI compatibility proxy<br/>optional OllamaProcess lifecycle"]
+        OllamaGenerate["Ollama /api/generate"]
+        OllamaEmbed["Ollama /api/embed"]
+        NativeTokenizer["ModelTokenizer"]
+        OllamaApi["/v1/completions<br/>/v1/embeddings<br/>/tokenize + /v1/tokenize"]
+        OllamaApp --> OllamaGenerate
+        OllamaApp --> OllamaEmbed
+        OllamaApp --> NativeTokenizer
+        OllamaGenerate --> OllamaApi
+        OllamaEmbed --> OllamaApi
+        NativeTokenizer --> OllamaApi
+    end
+
+    subgraph Managed["Persistent model-server path"]
+        AdminClient["Inference admin client<br/>X-Admin-Token"]
+        CpuManager["CPU manager container :8001"]
+        CudaManager["CUDA manager container :8002"]
+        ModelStore["Named /models volume<br/>HF packages + LoRA adapters"]
+        HfHub["Hugging Face Hub / archives"]
+        ManagedVllm["Managed vLLM process<br/>active base model + adapters"]
+        StableApi["Stable proxied /v1 generation API"]
+        AdminClient -->|"activate / metadata / export"| CpuManager
+        AdminClient -->|"activate / metadata / export"| CudaManager
+        HfHub --> ModelStore
+        ModelStore --> CpuManager
+        ModelStore --> CudaManager
+        CpuManager --> ManagedVllm
+        CudaManager --> ManagedVllm
+        ManagedVllm --> StableApi
+    end
+
+    Fit -->|"provider=qwen<br/>model_server=false"| VllmCommand
+    Fit -->|"provider=ollama"| OllamaApp
+    Fit -->|"model_server=true"| AdminClient
+
+    GenerationConsumers["Generation consumers<br/>agent planner + synthesis<br/>EDL expert execution"]
+    SemanticConsumers["Semantic consumers<br/>CAL retrieval + token budgeting<br/>EDL expert routing"]
+    VllmApi --> GenerationConsumers
+    StableApi --> GenerationConsumers
+    OllamaApi --> GenerationConsumers
+    OllamaApi --> SemanticConsumers
+```
+
+### Complete Project Architecture
+
+This view combines the offline graph-memory build path with the online execution
+path. Solid arrows show runtime or data flow; dashed arrows show shared contracts,
+configuration, or an alternative transport boundary.
+
+```mermaid
+flowchart TB
+    subgraph Inputs["Inputs and integration surfaces"]
+        User["User / automation"]
+        AgentCli["dullahan-agent CLI"]
+        McpClient["MCP client"]
+        Corpus["Files, repositories, documents"]
+        SourcePostgres["Source PostgreSQL rows"]
+    end
+
+    subgraph Build["Offline knowledge build"]
+        GraphBuilder["apps/graph-builder<br/>dullahan-graphify orchestrator"]
+        Graphify["Graphify<br/>semantic/structural graph extraction"]
+        KgPackage["packages/kg<br/>KnowledgeGraph + YAML store<br/>topology-aware K partitioning"]
+        ExpertGenerator["Cluster and expert generators"]
+        WorldIndexBuild["packages/world-state<br/>GraphDocumentSource + index rebuild"]
+    end
+
+    subgraph Memory["Persistent project memory"]
+        GraphMemory["memory/graph<br/>graph.yaml + clusters.yaml"]
+        ExpertMemory["memory/graph/experts.yaml<br/>+ cluster role documents"]
+        LocalIndex["memory/world_state/indexes<br/>local semantic vector index"]
+        ExecutionMemory["memory/executions<br/>queries, contexts, responses,<br/>traces and action graphs"]
+    end
+
+    subgraph Online["Online hierarchical execution"]
+        Runtime["apps/agent-runtime<br/>recursive orchestration"]
+        Planner["Planner / SubqueryGenerator"]
+        Guard["RecursionGuard<br/>depth, breadth, total-instance,<br/>deduplication and timeout limits"]
+        CalTools["LocalCalTool: single<br/>HttpCalTool: single + batch"]
+        EdlTools["LocalEdlTool: single<br/>HttpEdlTool: single + batch"]
+        Aggregator["ResponseAggregator<br/>final evidence synthesis"]
+        TraceStore["Tracing + ExecutionArtifactStore"]
+    end
+
+    subgraph Services["Context and expert services"]
+        Cal["apps/cal<br/>Context Augmentation Layer<br/>/augment + /augment/batch"]
+        WorldState["packages/world-state<br/>LocalWorldStateDB or PostgresWorldStateDB"]
+        PgVector["PostgreSQL + pgvector<br/>optional live world-state backend"]
+        Edl["apps/edl<br/>Expert Dispatch Layer<br/>/dispatch + /dispatch/batch"]
+        Router["ExpertRegistry + AttentionRouter"]
+        ExpertRunner["Prompt builder + ExpertRunner"]
+    end
+
+    subgraph ModelBoundary["Model and hardware boundary"]
+        Inference["apps/inference<br/>policy resolution, device detection,<br/>OpenAI-compatible serving/admin client"]
+        Ollama["Ollama<br/>generation + embeddings"]
+        DirectVllm["Direct vLLM<br/>CPU or CUDA"]
+        ModelServer["apps/model-server<br/>persistent CPU/CUDA managers,<br/>model packages and LoRA lifecycle"]
+        ManagedVllm["Managed vLLM process"]
+    end
+
+    subgraph Integration["External agent integration"]
+        McpServers["apps/mcp-servers<br/>stdio JSON-RPC MCP servers"]
+        CalMcp["send_to_CAL handler"]
+        EdlMcp["send_to_EDL handler"]
+    end
+
+    subgraph Foundation["Shared foundation and configuration"]
+        Shared["packages/shared<br/>Pydantic contracts, IDs,<br/>embedding/token clients, lexical retrieval"]
+        RuntimeConfig["configs/recursion.yaml<br/>+ planner/synthesis environment"]
+        InferenceConfig["configs/inference.yaml"]
+        ServiceConfig["CAL / EDL environment-backed settings"]
+        ReferencePolicies["configs/local.yaml, retrieval.yaml,<br/>routing.yaml: reference policy examples<br/>(not loaded directly by the services)"]
+    end
+
+    User --> AgentCli --> Runtime
+    RuntimeConfig -.-> Runtime
+    Runtime --> Planner
+    Runtime --> Guard
+    Planner -->|"generated sibling QueryEnvelopes"| CalTools
+    Guard --> Planner
+    CalTools -->|"in-process call or HTTP :8100"| Cal
+    Cal --> WorldState
+    GraphMemory --> WorldState
+    LocalIndex --> WorldState
+    PgVector <--> WorldState
+    Cal -->|"bounded ContextBundle"| EdlTools
+    EdlTools -->|"in-process call or HTTP :8200"| Edl
+    ExpertMemory --> Router
+    Edl --> Router --> ExpertRunner
+    ExpertRunner -->|"ExpertResponse"| Runtime
+    Runtime --> Aggregator
+    Aggregator -->|"final response"| User
+    Planner -->|"planning completion"| Inference
+    Aggregator -->|"synthesis completion"| Inference
+    Cal -->|"embeddings + native tokenization"| Inference
+    Router -->|"expert-role embeddings"| Inference
+    ExpertRunner -->|"expert completion"| Inference
+    Runtime --> TraceStore --> ExecutionMemory
+
+    InferenceConfig -.-> Inference
+    ServiceConfig -.-> Cal
+    ServiceConfig -.-> Edl
+    Inference --> Ollama
+    Inference --> DirectVllm
+    Inference -->|"admin activate / inspect / export"| ModelServer
+    ModelServer --> ManagedVllm
+
+    McpClient --> McpServers
+    McpServers -. "reuses agent-runtime HTTP adapters" .-> CalTools
+    McpServers -. "reuses agent-runtime HTTP adapters" .-> EdlTools
+    McpServers --> CalMcp -->|"HTTP"| Cal
+    McpServers --> EdlMcp -->|"HTTP"| Edl
+
+    Corpus --> GraphBuilder
+    SourcePostgres --> GraphBuilder
+    GraphBuilder -->|"run external CLI"| Graphify
+    Graphify -->|"graphify-out/graph.json"| GraphBuilder
+    GraphBuilder --> KgPackage
+    KgPackage --> GraphMemory
+    GraphMemory --> ExpertGenerator --> ExpertMemory
+    GraphBuilder --> WorldIndexBuild
+    KgPackage -.-> WorldIndexBuild
+    WorldIndexBuild --> LocalIndex
+
+    Shared -. "typed contracts and clients" .-> Runtime
+    Shared -.-> Cal
+    Shared -.-> Edl
+    Shared -.-> McpServers
+    Shared -.-> WorldState
+    Shared -.-> GraphBuilder
+```
+
 The key runtime contracts are:
 
 | Contract | Meaning |

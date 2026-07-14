@@ -15,13 +15,25 @@ specialists can open focused lines of inquiry, and every important step leaves a
 artifact behind. The result is not just an answer, but a visible account of how
 the system arrived there.
 
+Model hosting is a deployment choice, not another layer in that reasoning flow.
+Teams can connect Dullahan to an external OpenAI API-compatible service, or use
+the optional **Dullahan Inference** module as the local-hosting alternative. The
+local module keeps models and data on operator-controlled hardware while
+presenting the same OpenAI-compatible model boundary to the agent, CAL, and EDL.
+Direct use of the hosted OpenAI API currently requires a small gateway or client
+extension for bearer authentication and Dullahan's native tokenization endpoint;
+the bundled local path provides the project's complete inference contract out of
+the box.
+
 ## Quickstart: From Source Material To An Answer
 
 The sequence below starts at the repository root and ends with a persisted answer.
 Commands that keep running should be opened in separate terminals. The default
-route uses Ollama behind Dullahan's inference proxy because that single endpoint
-serves the three capabilities the system needs: generation, semantic embeddings,
-and native tokenization.
+route demonstrates the optional local-hosting choice: Ollama runs behind
+Dullahan's inference proxy, where one endpoint serves the three capabilities the
+system needs—generation, semantic embeddings, and native tokenization. If those
+capabilities come from an external OpenAI-compatible service and gateway instead,
+the Dullahan Inference process does not need to run.
 
 ### 1. Install Dullahan
 
@@ -87,7 +99,12 @@ the same offline graph, clustering, expert-generation, and WorldState build as
 file inputs. This source database is different from the optional pgvector
 database that CAL can use later as a live retrieval backend.
 
-### 4. Start The Recommended Inference Stack
+### 4. Start The Local Inference Alternative
+
+This step chooses Dullahan Inference instead of a hosted OpenAI API-compatible
+service. It is the recommended first run because it provides the whole model
+contract locally without changing how the rest of Dullahan communicates with
+models.
 
 Install Ollama, then pull the configured generation and embedding models:
 
@@ -249,7 +266,7 @@ complete package schema.
 | --- | --- |
 | Runtime and services | Python, FastAPI, Uvicorn, REST APIs |
 | Agent integration | MCP stdio tools, OpenAI-compatible planner, expert, vLLM, and Ollama endpoints |
-| Context and retrieval | Graphify, graph-backed RAG, local WorldStateDB vector index, PostgreSQL + pgvector, Qwen3 semantic embeddings |
+| Context and retrieval | Graphify, graph-backed RAG, local WorldStateDB vector index, PostgreSQL with pgvector, Qwen3 semantic embeddings |
 | Data and artifacts | JSON, YAML, Markdown, Mermaid |
 | Validation and schemas | Pydantic, pytest |
 | Local orchestration | Docker Compose, CLI entrypoints |
@@ -267,21 +284,26 @@ inference and model serving, **gold** for graph build and persistent memory,
 contracts, and configuration. Connectors inherit the color of the module they
 leave, so ownership of each interaction remains visible across subsystem boundaries.
 
+Multi-line nodes also share one internal hierarchy: the **bold first line** is the
+module, service, artifact, or decision name; the *italic second line* labels the
+information below it; and bullets identify its inputs, outputs, capabilities,
+policies, interfaces, or stored data.
+
 ```mermaid
 flowchart TD
-    User["Root query"] --> Runtime["Agent Runtime"]
-    Runtime --> Planner["Planner / subquery generator"]
-    Planner --> Subqueries["Sibling subqueries"]
-    Subqueries --> CAL["CAL: context augmentation"]
-    CAL --> ParentContext["Parent context retrieval"]
-    CAL --> WorldStateDB["WorldStateDB over graph docs / pgvector"]
-    CAL --> ContextBundle["Bounded ContextBundle"]
-    ContextBundle --> EDL["EDL: expert dispatch"]
-    EDL --> Router["Attention router"]
-    Router --> Experts["Cluster-specialized SLM experts"]
-    Experts --> Inference["Local inference: Qwen/vLLM or Ollama"]
+    User["<b>Root query</b>"] --> Runtime["<b>Agent Runtime</b><br/><i>Purpose</i><br/>• Coordinate the task"]
+    Runtime --> Planner["<b>Planner</b><br/><i>Purpose</i><br/>• Generate bounded subqueries"]
+    Planner --> Subqueries["<b>Sibling subqueries</b><br/><i>Contents</i><br/>• Focused assignments"]
+    Subqueries --> CAL["<b>CAL</b><br/><i>Purpose</i><br/>• Build focused context"]
+    CAL --> ParentContext["<b>Parent context</b><br/><i>Source</i><br/>• Earlier reasoning"]
+    CAL --> WorldStateDB["<b>WorldStateDB</b><br/><i>Knowledge sources</i><br/>• Graph documents<br/>• Optional pgvector index"]
+    CAL --> ContextBundle["<b>ContextBundle</b><br/><i>Output</i><br/>• Token-bounded evidence"]
+    ContextBundle --> EDL["<b>EDL</b><br/><i>Purpose</i><br/>• Dispatch to one expert"]
+    EDL --> Router["<b>Attention router</b><br/><i>Purpose</i><br/>• Match task to expertise"]
+    Router --> Experts["<b>SLM experts</b><br/><i>Specialization</i><br/>• Knowledge-graph clusters"]
+    Experts --> Inference["<b>Local inference</b><br/><i>Backends</i><br/>• Qwen through vLLM<br/>• Ollama"]
     Inference --> Runtime
-    Runtime --> Artifacts["YAML + Markdown execution artifacts"]
+    Runtime --> Artifacts["<b>Execution artifacts</b><br/><i>Formats</i><br/>• YAML<br/>• Markdown"]
 
     class User external
     class Runtime,Planner,Subqueries orchestration
@@ -318,39 +340,39 @@ batch-wide worker cap.
 
 ```mermaid
 flowchart TB
-    Request["DispatchRequest<br/>subquery + bounded ContextBundle"] --> Service["ExpertDispatchService<br/>/dispatch or /dispatch/batch"]
+    Request["<b>DispatchRequest</b><br/><i>Payload</i><br/>• Subquery<br/>• Bounded ContextBundle"] --> Service["<b>ExpertDispatchService</b><br/><i>Interfaces</i><br/>• /dispatch<br/>• /dispatch/batch"]
 
     subgraph RegistryData["Generated expert memory"]
-        ExpertsYaml["memory/graph/experts.yaml<br/>expert ID, cluster, model, role path,<br/>max_concurrency"]
-        RoleDocs["memory/documents/clusters/*.md<br/>cluster-specialized role context"]
+        ExpertsYaml["<b>memory/graph/experts.yaml</b><br/><i>Stored profile fields</i><br/>• Expert ID and cluster<br/>• Model and role path<br/>• max_concurrency"]
+        RoleDocs["<b>Cluster role documents</b><br/><i>Stored content</i><br/>• Expert domain descriptions"]
     end
 
-    Service --> Registry["ExpertRegistry.load()"]
+    Service --> Registry["<b>ExpertRegistry</b><br/><i>Purpose</i><br/>• Load registered experts"]
     ExpertsYaml --> Registry
     RoleDocs --> Registry
-    Registry --> Profiles["ExpertProfile[]"]
+    Registry --> Profiles["<b>Expert profiles</b><br/><i>Output</i><br/>• Validated ExpertProfile records"]
 
-    Service --> Router["AttentionRouter.select()"]
+    Service --> Router["<b>AttentionRouter</b><br/><i>Purpose</i><br/>• Select the best-matched expert"]
     Request --> Router
     Profiles --> Router
-    Router --> EmbedClient["OpenAI-compatible embedding client"]
-    EmbedClient -->|"POST /v1/embeddings"| EmbeddingModel["Inference embedding model<br/>subquery + every role context"]
-    EmbeddingModel --> Similarity["Cosine similarity<br/>negative scores clamped to zero"]
-    Similarity --> Softmax["Softmax distribution<br/>over all registered experts"]
-    Softmax --> Threshold{"Best raw score meets<br/>minimum threshold?"}
-    Threshold -->|"yes"| TopExpert["Highest-probability expert"]
-    Threshold -->|"no"| Fallback["Deterministic fallback<br/>first expert by ID"]
+    Router --> EmbedClient["<b>Embedding client</b><br/><i>Purpose</i><br/>• Request semantic vectors"]
+    EmbedClient -->|"POST /v1/embeddings"| EmbeddingModel["<b>Inference embedding model</b><br/><i>Inputs</i><br/>• Subquery<br/>• Each expert role description"]
+    EmbeddingModel --> Similarity["<b>Cosine similarity</b><br/><i>Processing</i><br/>• Score semantic alignment<br/>• Clamp negative scores"]
+    Similarity --> Softmax["<b>Softmax distribution</b><br/><i>Output</i><br/>• Probability for each expert"]
+    Softmax --> Threshold{"<b>Routing threshold</b><br/><i>Decision</i><br/>• Does the best score qualify?"}
+    Threshold -->|"yes"| TopExpert["<b>Matched expert</b><br/><i>Outcome</i><br/>• Highest routing probability"]
+    Threshold -->|"no"| Fallback["<b>Fallback expert</b><br/><i>Outcome</i><br/>• First expert by ID"]
 
-    TopExpert --> Gate["Per-expert concurrency gate<br/>shared across single + batch dispatch<br/>active instances &lt; max_concurrency"]
+    TopExpert --> Gate["<b>Per-expert concurrency gate</b><br/><i>Policy</i><br/>• Shared by single and batch dispatch<br/>• Active work stays below max_concurrency"]
     Fallback --> Gate
     Gate --> Prompt
-    Request --> Prompt["ExpertPromptBuilder<br/>role + subquery + first 5 context docs"]
-    Prompt --> Runner["ExpertRunner"]
-    Runner --> Provider["OpenAICompatibleHttpProvider"]
-    Provider -->|"POST /v1/completions<br/>selected expert model alias"| Generation["Qwen via vLLM,<br/>model-server, or Ollama proxy"]
-    Generation --> Response["ExpertResponse<br/>answer + citations + route confidence<br/>+ model/token metadata"]
+    Request --> Prompt["<b>ExpertPromptBuilder</b><br/><i>Inputs</i><br/>• Role instructions<br/>• Subquery<br/>• Five highest-ranked context documents"]
+    Prompt --> Runner["<b>ExpertRunner</b><br/><i>Purpose</i><br/>• Execute the selected expert"]
+    Runner --> Provider["<b>OpenAI-compatible provider</b><br/><i>Purpose</i><br/>• Send the completion request"]
+    Provider -->|"POST /v1/completions<br/>selected expert model alias"| Generation["<b>Expert generation</b><br/><i>Backends</i><br/>• vLLM<br/>• Model manager<br/>• Ollama proxy"]
+    Generation --> Response["<b>ExpertResponse</b><br/><i>Outputs</i><br/>• Answer and citations<br/>• Route confidence<br/>• Model and token metadata"]
 
-    Service -. "batch: max_dispatch_concurrency workers" .-> Router
+    Service -. "Batch policy: max_dispatch_concurrency workers" .-> Router
 
     class Request orchestration
     class Service,Registry,Profiles,Router,Similarity,Softmax,Threshold,TopExpert,Fallback,Gate,Prompt,Runner,Response dispatchLayer
@@ -370,38 +392,42 @@ flowchart TB
 
 ### Inference Module
 
-The inference module is the engine room: it turns an operator's declarative
-policy into a concrete, inspectable `ResolvedInferencePlan` so agents do not have
-to reason about hardware. Serving then follows one of three paths: a direct vLLM
-process, an OpenAI-compatible Ollama proxy, or one of the persistent Docker model
-servers. The default Ollama path exposes generation, embeddings, and native
-tokenization through one Dullahan endpoint.
+The inference module is Dullahan's optional local-hosting alternative to an
+external OpenAI API-compatible service. It is not an extra reasoning hop: when
+it is enabled, the agent, CAL, and EDL simply send their configured model calls
+to this local boundary instead of a hosted one. Internally, it turns an
+operator's declarative policy into a concrete, inspectable
+`ResolvedInferencePlan` so agents do not have to reason about hardware. Serving
+then follows one of three paths: a direct vLLM process, an OpenAI-compatible
+Ollama proxy, or one of the persistent Docker model servers. The default Ollama
+path exposes generation, embeddings, and native tokenization through one
+Dullahan endpoint.
 
 ```mermaid
 flowchart TB
-    Config["configs/inference.yaml<br/>provider, device, quantization, models,<br/>offload, server, model-server policy"] --> Load["InferenceConfig validation"]
-    Command["dullahan-inference<br/>plan | serve | activate | metadata | export"] --> Load
-    Load --> Detect["detect_device()"]
-    Detect --> Inventory["DeviceInventory<br/>CUDA via torch/nvidia-smi<br/>then Apple Metal, then CPU"]
-    Inventory --> Quantize["Resolve quantization<br/>Ollama → GGUF<br/>Qwen CUDA → GPTQ<br/>Qwen CPU/Metal → GGUF"]
-    Quantize --> Memory["Memory planner<br/>estimate weights + runtime overhead<br/>reserve RAM and size per-GPU CPU offload"]
-    Memory --> Plan["ResolvedInferencePlan<br/>engine, model, endpoint, command,<br/>offload, memory_fit, notes"]
-    Plan --> Fit{"Serving mode"}
+    Config["<b>configs/inference.yaml</b><br/><i>Policies</i><br/>• Provider and device<br/>• Models and quantization<br/>• Offload and serving"] --> Load["<b>InferenceConfig</b><br/><i>Purpose</i><br/>• Validate operator policy"]
+    Command["<b>dullahan-inference</b><br/><i>Commands</i><br/>• plan and serve<br/>• activate and metadata<br/>• export"] --> Load
+    Load --> Detect["<b>Device detection</b><br/><i>Purpose</i><br/>• Inspect available hardware"]
+    Detect --> Inventory["<b>DeviceInventory</b><br/><i>Detection order</i><br/>• NVIDIA CUDA<br/>• Apple Metal<br/>• CPU"]
+    Inventory --> Quantize["<b>Quantization resolver</b><br/><i>Policies</i><br/>• Ollama uses GGUF<br/>• Qwen on CUDA uses GPTQ<br/>• Qwen on CPU or Metal uses GGUF"]
+    Quantize --> Memory["<b>Memory planner</b><br/><i>Responsibilities</i><br/>• Estimate model and runtime memory<br/>• Reserve system RAM<br/>• Size CPU offload per GPU"]
+    Memory --> Plan["<b>ResolvedInferencePlan</b><br/><i>Outputs</i><br/>• Engine and model<br/>• Endpoint and command<br/>• Offload, fit status, and notes"]
+    Plan --> Fit{"<b>Serving mode</b><br/><i>Decision</i><br/>• Which runtime path applies?"}
 
     subgraph Direct["Direct Qwen / vLLM"]
-        VllmCommand["Build vllm serve command<br/>quantization + tokenizer + swap<br/>GPU utilization + CPU offload + tensor parallel"]
-        VllmProcess["Replace CLI process with vLLM"]
-        VllmApi["OpenAI-compatible generation API<br/>default /v1 on port 30000"]
+        VllmCommand["<b>vLLM launch command</b><br/><i>Arguments</i><br/>• Quantization, tokenizer, and swap<br/>• GPU utilization and CPU offload<br/>• Tensor parallelism"]
+        VllmProcess["<b>vLLM process</b><br/><i>Lifecycle</i><br/>• Replaces the inference CLI process"]
+        VllmApi["<b>Generation API</b><br/><i>Interface</i><br/>• OpenAI-compatible /v1<br/>• Default port 30000"]
         VllmCommand --> VllmProcess
         VllmProcess --> VllmApi
     end
 
     subgraph OllamaPath["Ollama compatibility path"]
-        OllamaApp["FastAPI compatibility proxy<br/>optional OllamaProcess lifecycle"]
-        OllamaGenerate["Ollama /api/generate"]
-        OllamaEmbed["Ollama /api/embed"]
-        NativeTokenizer["ModelTokenizer"]
-        OllamaApi["/v1/completions<br/>/v1/embeddings<br/>/tokenize + /v1/tokenize"]
+        OllamaApp["<b>FastAPI compatibility proxy</b><br/><i>Responsibilities</i><br/>• Translate Dullahan requests<br/>• Optionally manage Ollama"]
+        OllamaGenerate["<b>Ollama generation</b><br/><i>Upstream interface</i><br/>• /api/generate"]
+        OllamaEmbed["<b>Ollama embeddings</b><br/><i>Upstream interface</i><br/>• /api/embed"]
+        NativeTokenizer["<b>ModelTokenizer</b><br/><i>Capability</i><br/>• Count native model tokens"]
+        OllamaApi["<b>Dullahan inference API</b><br/><i>Interfaces</i><br/>• /v1/completions<br/>• /v1/embeddings<br/>• /tokenize and /v1/tokenize"]
         OllamaApp --> OllamaGenerate
         OllamaApp --> OllamaEmbed
         OllamaApp --> NativeTokenizer
@@ -411,13 +437,13 @@ flowchart TB
     end
 
     subgraph Managed["Persistent model-server path"]
-        AdminClient["Inference admin client<br/>X-Admin-Token"]
-        CpuManager["CPU manager container :8001"]
-        CudaManager["CUDA manager container :8002"]
-        ModelStore["Named /models volume<br/>adapter-only expert packages"]
-        HfHub["Hugging Face Hub / archives"]
-        ManagedVllm["Managed vLLM process<br/>active base model + adapters"]
-        StableApi["Stable proxied /v1 generation API"]
+        AdminClient["<b>Inference admin client</b><br/><i>Authentication</i><br/>• X-Admin-Token"]
+        CpuManager["<b>CPU model manager</b><br/><i>Endpoint</i><br/>• Port 8001"]
+        CudaManager["<b>CUDA model manager</b><br/><i>Endpoint</i><br/>• Port 8002"]
+        ModelStore["<b>/models volume</b><br/><i>Stored data</i><br/>• Adapter-only expert packages"]
+        HfHub["<b>Hugging Face Hub</b><br/><i>External sources</i><br/>• Base-model references<br/>• Adapter repositories"]
+        ManagedVllm["<b>Managed vLLM process</b><br/><i>Loaded assets</i><br/>• Shared base model<br/>• Registered adapters"]
+        StableApi["<b>Managed generation API</b><br/><i>Interface</i><br/>• Stable proxied /v1"]
         AdminClient -->|"activate / metadata / export"| CpuManager
         AdminClient -->|"activate / metadata / export"| CudaManager
         HfHub --> ModelStore
@@ -432,8 +458,8 @@ flowchart TB
     Fit -->|"provider=ollama"| OllamaApp
     Fit -->|"model_server=true"| AdminClient
 
-    GenerationConsumers["Generation consumers<br/>agent planner + synthesis<br/>EDL expert execution<br/>(per-expert gated in EDL)"]
-    SemanticConsumers["Semantic consumers<br/>CAL retrieval + token budgeting<br/>EDL expert routing"]
+    GenerationConsumers["<b>Generation consumers</b><br/><i>Capabilities used</i><br/>• Agent planning and synthesis<br/>• EDL expert execution<br/>• Per-expert gating in EDL"]
+    SemanticConsumers["<b>Semantic consumers</b><br/><i>Capabilities used</i><br/>• CAL retrieval and token budgeting<br/>• EDL expert routing"]
     VllmApi --> GenerationConsumers
     StableApi --> GenerationConsumers
     OllamaApi --> GenerationConsumers
@@ -468,68 +494,68 @@ configuration, or an alternative transport boundary.
 ```mermaid
 flowchart TB
     subgraph Inputs["Inputs and integration surfaces"]
-        User["User / automation"]
-        AgentCli["dullahan-agent CLI"]
-        McpClient["MCP client"]
-        Corpus["Files, repositories, documents"]
-        SourcePostgres["Source PostgreSQL rows"]
+        User["<b>User or automation</b>"]
+        AgentCli["<b>dullahan-agent CLI</b><br/><i>Purpose</i><br/>• Submit a root query"]
+        McpClient["<b>MCP client</b><br/><i>Purpose</i><br/>• Call context or expert tools"]
+        Corpus["<b>File-based knowledge</b><br/><i>Source types</i><br/>• Repositories<br/>• Documents<br/>• Configuration"]
+        SourcePostgres["<b>Source PostgreSQL</b><br/><i>Input</i><br/>• Rows selected by an ingestion query"]
     end
 
     subgraph Build["Offline knowledge build"]
-        GraphBuilder["apps/graph-builder<br/>dullahan-graphify orchestrator"]
-        Graphify["Graphify<br/>semantic/structural graph extraction"]
-        KgPackage["packages/kg<br/>KnowledgeGraph + YAML store<br/>topology-aware K partitioning"]
-        ExpertGenerator["Cluster and expert generators"]
-        WorldIndexBuild["packages/world-state<br/>GraphDocumentSource + index rebuild"]
+        GraphBuilder["<b>apps/graph-builder</b><br/><i>Purpose</i><br/>• Orchestrate the knowledge build"]
+        Graphify["<b>Graphify</b><br/><i>Capabilities</i><br/>• Structural extraction<br/>• Semantic extraction"]
+        KgPackage["<b>packages/kg</b><br/><i>Capabilities</i><br/>• KnowledgeGraph model<br/>• YAML persistence<br/>• Topology-aware K partitioning"]
+        ExpertGenerator["<b>Expert generators</b><br/><i>Outputs</i><br/>• Cluster definitions<br/>• Expert profiles and role documents"]
+        WorldIndexBuild["<b>packages/world-state</b><br/><i>Build task</i><br/>• Rebuild the graph-document index"]
     end
 
     subgraph Memory["Persistent project memory"]
-        GraphMemory["memory/graph<br/>graph.yaml + clusters.yaml"]
-        ExpertMemory["memory/graph/experts.yaml<br/>+ cluster role documents"]
-        LocalIndex["memory/world_state/indexes<br/>local semantic vector index"]
-        ExecutionMemory["memory/executions<br/>queries, contexts, responses,<br/>traces and action graphs"]
+        GraphMemory["<b>memory/graph</b><br/><i>Stored data</i><br/>• graph.yaml<br/>• clusters.yaml"]
+        ExpertMemory["<b>Expert memory</b><br/><i>Stored data</i><br/>• experts.yaml<br/>• Cluster role documents"]
+        LocalIndex["<b>Local WorldState index</b><br/><i>Stored data</i><br/>• Semantic vectors for graph documents"]
+        ExecutionMemory["<b>memory/executions</b><br/><i>Stored data</i><br/>• Queries and contexts<br/>• Responses and traces<br/>• Action graphs"]
     end
 
     subgraph Online["Online hierarchical execution"]
-        Runtime["apps/agent-runtime<br/>recursive orchestration"]
-        Planner["Planner / SubqueryGenerator"]
-        Guard["RecursionGuard<br/>depth, breadth, total-instance,<br/>deduplication and timeout limits"]
-        CalTools["LocalCalTool: single<br/>HttpCalTool: single + batch"]
-        EdlTools["LocalEdlTool: single<br/>HttpEdlTool: single + batch"]
-        Aggregator["ResponseAggregator<br/>final evidence synthesis"]
-        TraceStore["Tracing + ExecutionArtifactStore"]
+        Runtime["<b>apps/agent-runtime</b><br/><i>Purpose</i><br/>• Coordinate recursive execution"]
+        Planner["<b>Planner</b><br/><i>Output</i><br/>• Bounded subqueries"]
+        Guard["<b>RecursionGuard</b><br/><i>Policies</i><br/>• Depth and breadth limits<br/>• Total-instance limit<br/>• Deduplication and timeouts"]
+        CalTools["<b>CAL tool adapters</b><br/><i>Interfaces</i><br/>• Local single request<br/>• HTTP single or batch requests"]
+        EdlTools["<b>EDL tool adapters</b><br/><i>Interfaces</i><br/>• Local single request<br/>• HTTP single or batch requests"]
+        Aggregator["<b>ResponseAggregator</b><br/><i>Purpose</i><br/>• Synthesize final evidence"]
+        TraceStore["<b>Execution recorders</b><br/><i>Responsibilities</i><br/>• Collect traces<br/>• Persist execution artifacts"]
     end
 
     subgraph Services["Context and expert services"]
-        Cal["apps/cal<br/>Context Augmentation Layer<br/>/augment + /augment/batch"]
-        WorldState["packages/world-state<br/>LocalWorldStateDB or PostgresWorldStateDB"]
-        PgVector["PostgreSQL + pgvector<br/>optional live world-state backend"]
-        Edl["apps/edl<br/>Expert Dispatch Layer<br/>/dispatch + /dispatch/batch"]
-        Router["ExpertRegistry + AttentionRouter"]
-        ExpertGate["Per-expert concurrency gate<br/>profile max_concurrency<br/>within each EDL process"]
-        ExpertRunner["Prompt builder + ExpertRunner"]
+        Cal["<b>apps/cal</b><br/><i>Capabilities</i><br/>• Build bounded context<br/>• /augment<br/>• /augment/batch"]
+        WorldState["<b>packages/world-state</b><br/><i>Backends</i><br/>• LocalWorldStateDB<br/>• PostgresWorldStateDB"]
+        PgVector["<b>PostgreSQL with pgvector</b><br/><i>Role</i><br/>• Optional live WorldState backend"]
+        Edl["<b>apps/edl</b><br/><i>Capabilities</i><br/>• Route and execute experts<br/>• /dispatch<br/>• /dispatch/batch"]
+        Router["<b>Expert routing</b><br/><i>Components</i><br/>• ExpertRegistry<br/>• AttentionRouter"]
+        ExpertGate["<b>Expert concurrency gate</b><br/><i>Policy</i><br/>• Enforce profile max_concurrency<br/>• Scope capacity to one EDL process"]
+        ExpertRunner["<b>Expert execution</b><br/><i>Components</i><br/>• Prompt builder<br/>• ExpertRunner"]
     end
 
     subgraph ModelBoundary["Model and hardware boundary"]
-        Inference["apps/inference<br/>policy resolution, device detection,<br/>OpenAI-compatible serving/admin client"]
-        Ollama["Ollama<br/>generation + embeddings"]
-        DirectVllm["Direct vLLM<br/>CPU or CUDA"]
-        ModelServer["apps/model-server<br/>persistent CPU/CUDA managers,<br/>adapter packages and LoRA lifecycle"]
-        ManagedVllm["Managed vLLM process"]
+        Inference["<b>apps/inference</b><br/><i>Responsibilities</i><br/>• Resolve serving policy<br/>• Detect hardware<br/>• Serve models or administer managers"]
+        Ollama["<b>Ollama</b><br/><i>Capabilities</i><br/>• Generation<br/>• Embeddings"]
+        DirectVllm["<b>Direct vLLM</b><br/><i>Execution targets</i><br/>• CPU<br/>• CUDA"]
+        ModelServer["<b>apps/model-server</b><br/><i>Capabilities</i><br/>• Persistent CPU or CUDA managers<br/>• Adapter package lifecycle"]
+        ManagedVllm["<b>Managed vLLM process</b><br/><i>Lifecycle</i><br/>• Started by the active model manager"]
     end
 
     subgraph Integration["External agent integration"]
-        McpServers["apps/mcp-servers<br/>stdio JSON-RPC MCP servers"]
-        CalMcp["send_to_CAL handler"]
-        EdlMcp["send_to_EDL handler"]
+        McpServers["<b>apps/mcp-servers</b><br/><i>Interface</i><br/>• stdio JSON-RPC"]
+        CalMcp["<b>send_to_CAL</b><br/><i>Purpose</i><br/>• Request bounded context"]
+        EdlMcp["<b>send_to_EDL</b><br/><i>Purpose</i><br/>• Request expert execution"]
     end
 
     subgraph Foundation["Shared foundation and configuration"]
-        Shared["packages/shared<br/>Pydantic contracts, IDs,<br/>embedding/token clients, lexical retrieval"]
-        RuntimeConfig["configs/recursion.yaml<br/>+ planner/synthesis environment"]
-        InferenceConfig["configs/inference.yaml"]
-        ServiceConfig["CAL / EDL environment-backed settings"]
-        ReferencePolicies["configs/local.yaml, retrieval.yaml,<br/>routing.yaml: reference policy examples<br/>(not loaded directly by the services)"]
+        Shared["<b>packages/shared</b><br/><i>Capabilities</i><br/>• Typed contracts and IDs<br/>• Embedding and token clients<br/>• Lexical retrieval"]
+        RuntimeConfig["<b>Runtime configuration</b><br/><i>Settings</i><br/>• Recursion policy<br/>• Planner and synthesis environment"]
+        InferenceConfig["<b>Inference configuration</b><br/><i>Settings</i><br/>• Model, hardware, and serving policy"]
+        ServiceConfig["<b>CAL and EDL configuration</b><br/><i>Settings</i><br/>• Environment-backed service policy"]
+        ReferencePolicies["<b>Reference policies</b><br/><i>Examples</i><br/>• Local execution<br/>• Retrieval<br/>• Routing<br/><i>Note: not loaded directly by services</i>"]
     end
 
     User --> AgentCli
@@ -555,7 +581,7 @@ flowchart TB
     Aggregator -->|"final response"| User
     Planner -->|"planning completion"| Inference
     Aggregator -->|"synthesis completion"| Inference
-    Cal -->|"embeddings + native tokenization"| Inference
+    Cal -->|"Embeddings and native tokenization"| Inference
     Router -->|"expert-role embeddings"| Inference
     ExpertRunner -->|"expert completion"| Inference
     Runtime --> TraceStore
@@ -907,7 +933,7 @@ Start CAL and EDL with Docker Compose:
 docker compose up cal edl
 ```
 
-To run CAL against PostgreSQL + pgvector instead of the local JSON index, start
+To run CAL against PostgreSQL with pgvector instead of the local JSON index, start
 PostgreSQL and set `WORLD_STATE_BACKEND=postgres` for CAL:
 
 ```bash
@@ -1104,7 +1130,7 @@ Dullahan is designed to scale across several axes:
 
 | Axis | Current mechanism | Scaling path |
 | --- | --- | --- |
-| Context volume | WorldStateDB indexes graph-backed Markdown documents locally or in PostgreSQL + pgvector. | Shard pgvector tables, add graph-aware retrieval, or move indexes beside CAL workers. |
+| Context volume | WorldStateDB indexes graph-backed Markdown documents locally or in PostgreSQL with pgvector. | Shard pgvector tables, add graph-aware retrieval, or move indexes beside CAL workers. |
 | Expert count | One or more experts per cluster in `experts.yaml`. | Regenerate experts from larger graphs, split clusters by K, or specialize experts by domain and modality. |
 | Subquery fanout | Breadth, depth, total-instance, timeout, and sibling-concurrency limits. | Tune per workload, add queue-backed execution, or distribute CAL/EDL workers. |
 | Service deployment | Local process or HTTP CAL/EDL services. | Run CAL and EDL independently on Kubernetes, attach model-serving backends, and autoscale by request pressure. |

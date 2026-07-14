@@ -61,12 +61,10 @@ class ModelQuantization(StrEnum):
 
 
 class PackageMode(StrEnum):
-    FULL = "full"
     LORA_ONLY = "lora_only"
 
 
 class ExportMode(StrEnum):
-    FULL = "full"
     LORA_ONLY = "lora_only"
 
 
@@ -81,7 +79,7 @@ class HFImport(BaseModel):
     quantization: ModelQuantization | None = None
     supported_backends: list[Backend] | None = None
     base_model: str | None = None
-    package_mode: PackageMode = PackageMode.FULL
+    package_mode: PackageMode = PackageMode.LORA_ONLY
     adapter_name: str | None = None
 
 
@@ -109,9 +107,18 @@ class ActivateRequest(BaseModel):
 
 
 BACKEND = Backend(BACKEND_NAME)
-DEFAULT_EXPORT_MODE = ExportMode(os.getenv("MODEL_EXPORT_MODE", ExportMode.FULL))
+DEFAULT_EXPORT_MODE = ExportMode.LORA_ONLY
 ADAPTERS_DIRECTORY = "adapters"
-ADAPTER_WEIGHT_PATTERNS = ("*.safetensors", "*.bin")
+ADAPTER_WEIGHT_PATTERNS = ("adapter_model.safetensors", "adapter_model.bin")
+BASE_WEIGHT_PATTERNS = (
+    "model.safetensors",
+    "model-*.safetensors",
+    "pytorch_model.bin",
+    "pytorch_model-*.bin",
+    "*.gguf",
+    "*.safetensors.index.json",
+    "*.bin.index.json",
+)
 PROTECTED_ACTIVATION_FLAGS = {
     "--device",
     "--host",
@@ -184,39 +191,60 @@ def lora_adapters(path: Path) -> list[dict[str, Any]]:
     for adapter in sorted(adapters_root.iterdir()):
         if not adapter.is_dir() or adapter.name.startswith("."):
             continue
-        config_path = adapter / "adapter_config.json"
-        if not config_path.is_file():
-            raise HTTPException(
-                status_code=400,
-                detail=f"LoRA adapter {adapter.name!r} is missing adapter_config.json",
-            )
-        weights = [
-            weight
-            for pattern in ADAPTER_WEIGHT_PATTERNS
-            for weight in adapter.glob(pattern)
-            if weight.is_file()
-        ]
-        if not weights:
-            raise HTTPException(
-                status_code=400,
-                detail=f"LoRA adapter {adapter.name!r} has no supported weight file",
-            )
-        config = json.loads(config_path.read_text(encoding="utf-8"))
-        result.append(
-            {
-                "name": checked_name(adapter.name),
-                "directory": f"{ADAPTERS_DIRECTORY}/{adapter.name}",
-                "base_model": config.get("base_model_name_or_path"),
-                "bytes": dir_size(adapter),
-            }
-        )
+        result.append(lora_adapter_record(path, adapter))
     return result
+
+
+def lora_adapter_record(package: Path, adapter: Path) -> dict[str, Any]:
+    name = checked_name(adapter.name)
+    config_path = adapter / "adapter_config.json"
+    if not config_path.is_file():
+        raise HTTPException(
+            status_code=400,
+            detail=f"LoRA adapter {name!r} is missing adapter_config.json",
+        )
+    weights = [
+        weight
+        for pattern in ADAPTER_WEIGHT_PATTERNS
+        for weight in adapter.glob(pattern)
+        if weight.is_file()
+    ]
+    if not weights:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"LoRA adapter {name!r} must contain adapter_model.safetensors "
+                "or adapter_model.bin"
+            ),
+        )
+    base_weights = sorted(
+        weight.relative_to(adapter).as_posix()
+        for pattern in BASE_WEIGHT_PATTERNS
+        for weight in adapter.rglob(pattern)
+        if weight.is_file()
+    )
+    if base_weights:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"LoRA adapter {name!r} contains base-model weight files: "
+                + ", ".join(base_weights)
+            ),
+        )
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    return {
+        "name": name,
+        "directory": f"{ADAPTERS_DIRECTORY}/{name}",
+        "storage_path": str(adapter.resolve()),
+        "base_model": config.get("base_model_name_or_path"),
+        "bytes": dir_size(adapter),
+    }
 
 
 def package_mode(path: Path, manifest: dict[str, Any] | None = None) -> PackageMode:
     manifest = manifest if manifest is not None else model_manifest(path)
     try:
-        return PackageMode(manifest.get("package_mode", PackageMode.FULL))
+        return PackageMode(manifest.get("package_mode", PackageMode.LORA_ONLY))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid model package_mode") from exc
 
@@ -255,7 +283,10 @@ def prepare_manifest(
         "quantization": quantization_mode.value,
         "supported_backends": [backend.value for backend in backends],
         "base_model": extra.get("base_model") or existing.get("base_model") or inferred_base_model,
-        "adapters": adapters,
+        "adapters": [
+            {key: value for key, value in adapter.items() if key != "storage_path"}
+            for adapter in adapters
+        ],
     }
     write_manifest(path, payload)
     return payload
@@ -272,20 +303,11 @@ def validate_activation_args(args: list[str]) -> None:
 
 
 def launch_model_path(path: Path, manifest: dict[str, Any]) -> Path | str:
-    if package_mode(path, manifest) == PackageMode.LORA_ONLY:
-        base_model = manifest.get("base_model")
-        if not base_model:
-            raise HTTPException(status_code=400, detail="LoRA-only package has no base_model")
-        return str(base_model)
-    if manifest.get("quantization") != ModelQuantization.GGUF:
-        return path
-    candidates = sorted(path.glob("*.gguf"))
-    if len(candidates) != 1:
-        raise HTTPException(
-            status_code=400,
-            detail="GGUF model directories must contain exactly one top-level .gguf file",
-        )
-    return candidates[0]
+    package_mode(path, manifest)
+    base_model = manifest.get("base_model")
+    if not base_model:
+        raise HTTPException(status_code=400, detail="LoRA package has no base_model")
+    return str(base_model)
 
 
 def lora_activation_args(
@@ -337,40 +359,63 @@ def dir_size(path: Path) -> int:
     return sum(p.stat().st_size for p in path.rglob("*") if p.is_file())
 
 
-def validate_model_directory(path: Path) -> None:
-    if not (path / "config.json").is_file():
+def validate_adapter_only_layout(path: Path) -> None:
+    allowed = {"dullahan-model.json", ADAPTERS_DIRECTORY}
+    unexpected = sorted(item.name for item in path.iterdir() if item.name not in allowed)
+    if unexpected:
         raise HTTPException(
             status_code=400,
-            detail="Archive is not a Hugging Face model directory: config.json is missing",
+            detail=(
+                "Model packages are adapter-only; unexpected top-level files: "
+                + ", ".join(unexpected)
+            ),
         )
-    weight_candidates = (
-        list(path.glob("*.safetensors"))
-        + list(path.glob("*.bin"))
-        + list(path.glob("*.gguf"))
-        + list(path.glob("*.safetensors.index.json"))
-        + list(path.glob("*.bin.index.json"))
-    )
-    if not weight_candidates:
-        raise HTTPException(status_code=400, detail="No supported model weight files were found")
+    adapters_root = path / ADAPTERS_DIRECTORY
+    if adapters_root.is_dir():
+        invalid_entries = sorted(
+            item.name
+            for item in adapters_root.iterdir()
+            if not item.is_dir() or item.name.startswith(".")
+        )
+        if invalid_entries:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "The adapters directory may contain only named adapter directories: "
+                    + ", ".join(invalid_entries)
+                ),
+            )
 
 
 def validate_model_package(path: Path) -> dict[str, Any]:
     manifest = model_manifest(path)
     mode = package_mode(path, manifest)
+    validate_adapter_only_layout(path)
     adapters = lora_adapters(path)
-    if mode == PackageMode.FULL:
-        validate_model_directory(path)
-    else:
-        if not manifest.get("base_model"):
-            raise HTTPException(
-                status_code=400,
-                detail="LoRA-only packages must declare base_model in dullahan-model.json",
-            )
-        if not adapters:
-            raise HTTPException(
-                status_code=400,
-                detail="LoRA-only packages must contain at least one LoRA adapter",
-            )
+    base_model = manifest.get("base_model")
+    if not base_model:
+        raise HTTPException(
+            status_code=400,
+            detail="LoRA packages must declare base_model in dullahan-model.json",
+        )
+    if not adapters:
+        raise HTTPException(
+            status_code=400,
+            detail="LoRA packages must contain at least one LoRA adapter",
+        )
+    mismatched = sorted(
+        adapter["name"]
+        for adapter in adapters
+        if adapter["base_model"] and adapter["base_model"] != base_model
+    )
+    if mismatched:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"LoRA adapters do not target declared base_model {base_model!r}: "
+                + ", ".join(mismatched)
+            ),
+        )
     return {**manifest, "package_mode": mode.value, "adapters": adapters}
 
 
@@ -382,6 +427,7 @@ def model_record(path: Path) -> dict[str, Any]:
     return {
         "name": path.name,
         "active": path.name == _active_model,
+        "storage_directory": str(path.resolve()),
         "bytes": dir_size(path),
         "manifest": manifest,
         "adapters": adapters,
@@ -412,6 +458,29 @@ def normalize_single_root(path: Path) -> Path:
     if len(children) == 1 and children[0].is_dir() and not (path / "config.json").exists():
         return children[0]
     return path
+
+
+def replace_model_directory(source: Path, target: Path) -> None:
+    staging = MODEL_ROOT / f".{target.name}.staging"
+    backup = MODEL_ROOT / f".{target.name}.old"
+    if staging.exists():
+        shutil.rmtree(staging)
+    if backup.exists():
+        shutil.rmtree(backup)
+    source.rename(staging)
+    try:
+        if target.exists():
+            target.rename(backup)
+        staging.rename(target)
+    except Exception:
+        if backup.exists() and not target.exists():
+            backup.rename(target)
+        raise
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        if backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
 
 
 async def stop_vllm() -> None:
@@ -498,40 +567,35 @@ async def import_hf(spec: HFImport, request: Request) -> dict[str, Any]:
             allow_patterns=spec.allow_patterns,
             ignore_patterns=spec.ignore_patterns,
         )
-        if spec.package_mode == PackageMode.LORA_ONLY:
-            if not spec.base_model:
-                raise HTTPException(
-                    status_code=400,
-                    detail="LoRA-only Hugging Face imports require base_model",
-                )
-            package = Path(tempfile.mkdtemp(prefix=f".{name}-package-", dir=MODEL_ROOT))
-            adapter = package / ADAPTERS_DIRECTORY / checked_name(spec.adapter_name or name)
-            adapter.parent.mkdir()
-            temp.rename(adapter)
-            temp = package
-        else:
-            validate_model_directory(temp)
+        package = Path(tempfile.mkdtemp(prefix=f".{name}-package-", dir=MODEL_ROOT))
+        adapter = package / ADAPTERS_DIRECTORY / checked_name(spec.adapter_name or name)
+        adapter.parent.mkdir()
+        temp.rename(adapter)
+        temp = package
+        adapter_metadata = lora_adapter_record(package, adapter)
+        base_model = spec.base_model or adapter_metadata["base_model"]
+        if not base_model:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "LoRA Hugging Face imports require base_model or an "
+                    "adapter_config.json that declares base_model_name_or_path"
+                ),
+            )
         prepare_manifest(
             temp,
             name=name,
             source="huggingface",
             repo_id=spec.repo_id,
             revision=spec.revision,
-            base_model=spec.base_model or spec.repo_id,
+            base_model=base_model,
             quantization=spec.quantization,
             supported_backends=spec.supported_backends,
-            package_mode=spec.package_mode.value,
+            package_mode=PackageMode.LORA_ONLY.value,
         )
         validate_model_package(temp)
-        backup = target.with_name(f".{name}.old")
-        if backup.exists():
-            shutil.rmtree(backup)
-        if target.exists():
-            target.rename(backup)
-        temp.rename(target)
-        if backup.exists():
-            shutil.rmtree(backup)
-        return {"name": name, "bytes": dir_size(target)}
+        replace_model_directory(temp, target)
+        return model_record(target)
     except Exception:
         if temp.exists():
             shutil.rmtree(temp, ignore_errors=True)
@@ -571,23 +635,149 @@ async def upload_model(
             name=name,
             source="upload",
             sha256=digest.hexdigest(),
+            package_mode=PackageMode.LORA_ONLY.value,
         )
-
-        staging = MODEL_ROOT / f".{name}.staging"
-        if staging.exists():
-            shutil.rmtree(staging)
-        source.rename(staging)
-        backup = MODEL_ROOT / f".{name}.old"
-        if backup.exists():
-            shutil.rmtree(backup)
-        if target.exists():
-            target.rename(backup)
-        staging.rename(target)
-        if backup.exists():
-            shutil.rmtree(backup)
-        return {"name": name, "sha256": digest.hexdigest(), "bytes": dir_size(target)}
+        validate_model_package(source)
+        replace_model_directory(source, target)
+        return {
+            **model_record(target),
+            "sha256": digest.hexdigest(),
+        }
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+@app.get("/admin/models/{name}/adapters/{adapter_name}")
+async def get_adapter(name: str, adapter_name: str, request: Request) -> dict[str, Any]:
+    require_admin(request)
+    target = model_dir(name)
+    adapter_name = checked_name(adapter_name)
+    if not target.is_dir():
+        raise HTTPException(status_code=404, detail="Model not found")
+    adapter = target / ADAPTERS_DIRECTORY / adapter_name
+    if not adapter.is_dir():
+        raise HTTPException(status_code=404, detail="LoRA adapter not found")
+    return lora_adapter_record(target, adapter)
+
+
+@app.put("/admin/models/{name}/adapters/{adapter_name}/archive", status_code=201)
+async def upload_adapter(
+    name: str,
+    adapter_name: str,
+    request: Request,
+    file: Annotated[UploadFile, File()],
+    base_model: str | None = None,
+    replace: bool = False,
+) -> dict[str, Any]:
+    require_admin(request)
+    name = checked_name(name)
+    adapter_name = checked_name(adapter_name)
+    target = model_dir(name)
+    if name == _active_model:
+        raise HTTPException(status_code=409, detail="Cannot modify the active model")
+
+    work = Path(tempfile.mkdtemp(prefix=f".{name}-{adapter_name}-upload-", dir=MODEL_ROOT))
+    archive = work / "adapter.tar"
+    extracted = work / "extracted"
+    extracted.mkdir()
+    digest = hashlib.sha256()
+    try:
+        with archive.open("wb") as out:
+            while chunk := await file.read(8 * 1024 * 1024):
+                digest.update(chunk)
+                out.write(chunk)
+        safe_extract_tar(archive, extracted)
+        source = normalize_single_root(extracted)
+
+        package = work / "package"
+        if target.exists():
+            shutil.copytree(target, package)
+        else:
+            package.mkdir()
+            (package / ADAPTERS_DIRECTORY).mkdir()
+
+        manifest = model_manifest(package)
+        existing_base_model = manifest.get("base_model")
+        if base_model and existing_base_model and base_model != existing_base_model:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Package base_model is {existing_base_model!r}; "
+                    f"cannot replace it with {base_model!r}"
+                ),
+            )
+
+        destination = package / ADAPTERS_DIRECTORY / adapter_name
+        if destination.exists() and not replace:
+            raise HTTPException(status_code=409, detail="LoRA adapter already exists")
+        if destination.exists():
+            shutil.rmtree(destination)
+        source.rename(destination)
+        adapter_metadata = lora_adapter_record(package, destination)
+        resolved_base_model = base_model or existing_base_model or adapter_metadata["base_model"]
+        if not resolved_base_model:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "A new package requires base_model or an adapter_config.json "
+                    "that declares base_model_name_or_path"
+                ),
+            )
+        prepare_manifest(
+            package,
+            name=name,
+            source="adapter_upload",
+            base_model=resolved_base_model,
+            package_mode=PackageMode.LORA_ONLY.value,
+        )
+        validate_model_package(package)
+        replace_model_directory(package, target)
+        stored_adapter = target / ADAPTERS_DIRECTORY / adapter_name
+        return {
+            "name": name,
+            "adapter": lora_adapter_record(target, stored_adapter),
+            "sha256": digest.hexdigest(),
+            "storage_directory": str(target.resolve()),
+        }
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+@app.delete("/admin/models/{name}/adapters/{adapter_name}")
+async def delete_adapter(name: str, adapter_name: str, request: Request) -> dict[str, str]:
+    require_admin(request)
+    name = checked_name(name)
+    adapter_name = checked_name(adapter_name)
+    target = model_dir(name)
+    if name == _active_model:
+        raise HTTPException(status_code=409, detail="Cannot modify the active model")
+    if not target.is_dir():
+        raise HTTPException(status_code=404, detail="Model not found")
+    adapter = target / ADAPTERS_DIRECTORY / adapter_name
+    if not adapter.is_dir():
+        raise HTTPException(status_code=404, detail="LoRA adapter not found")
+    if len(lora_adapters(target)) == 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete the package's only adapter; delete the model package instead",
+        )
+
+    work = Path(tempfile.mkdtemp(prefix=f".{name}-{adapter_name}-delete-", dir=MODEL_ROOT))
+    try:
+        package = work / "package"
+        shutil.copytree(target, package)
+        shutil.rmtree(package / ADAPTERS_DIRECTORY / adapter_name)
+        prepare_manifest(
+            package,
+            name=name,
+            source="adapter_delete",
+            package_mode=PackageMode.LORA_ONLY.value,
+        )
+        validate_model_package(package)
+        replace_model_directory(package, target)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return {"deleted": adapter_name, "model": name}
 
 
 @app.delete("/admin/models/{name}")
@@ -613,50 +803,18 @@ async def export_model(name: str, request: Request) -> FileResponse:
     if not source.exists():
         raise HTTPException(status_code=404, detail="Model not found")
     requested_mode = request.query_params.get("mode")
-    try:
-        mode = ExportMode(requested_mode) if requested_mode else DEFAULT_EXPORT_MODE
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="mode must be full or lora_only") from exc
+    if requested_mode not in {None, DEFAULT_EXPORT_MODE.value}:
+        raise HTTPException(status_code=400, detail="mode must be lora_only")
 
     export_dir = MODEL_ROOT / ".exports"
     export_dir.mkdir(exist_ok=True)
-    suffix = "" if mode == ExportMode.FULL else "-lora-only"
-    output = export_dir / f"{name}{suffix}.tar.gz"
-    temp_output = export_dir / f".{name}{suffix}.tar.gz.tmp"
+    output = export_dir / f"{name}-lora-only.tar.gz"
+    temp_output = export_dir / f".{name}-lora-only.tar.gz.tmp"
     if temp_output.exists():
         temp_output.unlink()
-    export_source = source
-    staging: Path | None = None
-    if mode == ExportMode.LORA_ONLY:
-        manifest = model_manifest(source)
-        adapters = lora_adapters(source)
-        if not adapters:
-            raise HTTPException(status_code=409, detail="Model has no LoRA adapters to export")
-        if not manifest.get("base_model"):
-            raise HTTPException(
-                status_code=409,
-                detail="Model metadata has no named base_model for a LoRA-only export",
-            )
-        staging = Path(tempfile.mkdtemp(prefix=f".{name}-lora-export-", dir=export_dir))
-        export_source = staging / name
-        export_source.mkdir()
-        shutil.copytree(source / ADAPTERS_DIRECTORY, export_source / ADAPTERS_DIRECTORY)
-        write_manifest(
-            export_source,
-            {
-                **manifest,
-                "name": name,
-                "package_mode": PackageMode.LORA_ONLY.value,
-                "adapters": lora_adapters(export_source),
-                "exported_from": manifest.get("package_mode", PackageMode.FULL.value),
-            },
-        )
-    try:
-        with tarfile.open(temp_output, "w:gz") as tf:
-            tf.add(export_source, arcname=name, recursive=True)
-    finally:
-        if staging:
-            shutil.rmtree(staging, ignore_errors=True)
+    validate_model_package(source)
+    with tarfile.open(temp_output, "w:gz") as tf:
+        tf.add(source, arcname=name, recursive=True)
     temp_output.replace(output)
     return FileResponse(output, media_type="application/gzip", filename=output.name)
 

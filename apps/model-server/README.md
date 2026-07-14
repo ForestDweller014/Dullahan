@@ -6,9 +6,14 @@ This directory has exactly two vLLM 0.24.0 variants:
 - `cuda`: Linux NVIDIA CUDA vLLM.
 
 Both wrappers expose the manager on port `8080` inside the container, persist
-complete Hugging Face model directories under `/models`, and proxy the active
-vLLM process through a stable `/v1` API. Host ports are `8001` for CPU and
-`8002` for CUDA.
+LoRA expert packages under `/models`, and proxy the active vLLM process through
+a stable `/v1` API. Host ports are `8001` for CPU and `8002` for CUDA.
+
+`/models` is backed by the `cpu-models` or `cuda-models` Docker named volume.
+The CRUD store never contains base checkpoint weights. Base models are named in
+the package manifest and resolved by vLLM at activation time; Hugging Face may
+cache those shared base weights separately under `/root/.cache/huggingface` in
+the `hf-cache` volume.
 
 The local `.env` is ignored by Git and excluded from the Docker build context.
 Create it from `.env.example` and set `MODEL_ADMIN_TOKEN` and `HF_TOKEN` before
@@ -63,31 +68,36 @@ dullahan-inference plan
 dullahan-inference activate
 ```
 
-Model archives are complete Hugging Face-compatible directories. Their
-`dullahan-model.json` manifest records `quantization` and
-`supported_backends`. The requested automatic policy is GGUF for CPU and GPTQ
-for CUDA; GPTQ, GGUF, and AWQ remain explicit configuration choices.
+Expert archives are adapter-only Hugging Face-compatible packages. Their
+`dullahan-model.json` manifest records the remote `base_model`, quantization,
+supported backends, and adapter inventory. The requested automatic policy is
+GGUF for CPU and GPTQ for CUDA; GPTQ, GGUF, and AWQ remain explicit
+configuration choices for the remotely resolved base model.
 
 ## Model packages and LoRA adapters
 
-The manager stores one package per model name under `/models`. A full package
-contains the base checkpoint and may contain any number of named LoRA adapters:
+The manager stores one package per model name under `/models`. Each package
+contains only a base-model reference and any number of named LoRA adapters:
 
 ```text
 qwen-local/
-  config.json
-  model.safetensors
   dullahan-model.json
   adapters/
-    legal/
+    local-slm-legal/
       adapter_config.json
       adapter_model.safetensors
 ```
 
-The manifest exposes `package_mode`, `base_model`, and an `adapters` inventory.
-Activation starts one base model and registers every stored adapter with vLLM;
-clients select the base model or an adapter through the OpenAI-compatible
-`model` request field.
+The absolute container paths are therefore
+`/models/qwen-local/adapters/local-slm-legal/`. Metadata responses expose the
+package `storage_directory`, each adapter's relative `directory`, and its
+resolved `storage_path`.
+
+The manifest exposes `package_mode: lora_only`, `base_model`, and an `adapters`
+inventory. Upload validation rejects top-level base checkpoint/configuration
+files. Activation starts the shared base model from its manifest reference and
+registers every stored adapter with vLLM; clients select the base model or an
+adapter through the OpenAI-compatible `model` request field.
 
 LoRA concurrency is explicit rather than relying on vLLM's single-adapter
 batch default. `model_server.max_loras` controls the number of distinct
@@ -98,14 +108,10 @@ host-memory adapter cache and must be at least as large. Defaults are `4` and
 and host memory, so benchmark representative adapter ranks and swarm traffic
 before increasing them.
 
-A `lora_only` package contains only `dullahan-model.json` and `adapters/`. Its
-manifest must name the Hugging Face base model. At activation time vLLM resolves
-that base name (using `HF_TOKEN` when required) and loads the packaged adapters.
-
-Choose the default archive format with `MODEL_EXPORT_MODE=full|lora_only` in
-`.env`, override it per request with `?mode=`, or set
-`model_server.export_mode` in `configs/inference.yaml` when using the inference
-client:
+Every package contains only `dullahan-model.json` and `adapters/`. Its manifest
+must name the Hugging Face base model. At activation time vLLM resolves that
+base name (using `HF_TOKEN` when required) and loads the packaged adapters.
+Exports are always adapter-only:
 
 ```bash
 dullahan-inference metadata
@@ -116,15 +122,20 @@ The authenticated CRUD endpoints are:
 
 - `PUT /admin/models/{name}/archive?replace=false` — create or fully replace a package.
 - `GET /admin/models/{name}` — read package metadata and adapter inventory.
-- `GET /admin/models/{name}/archive?mode=full|lora_only` — export a package.
+- `GET /admin/models/{name}/archive?mode=lora_only` — export an adapter-only package.
 - `DELETE /admin/models/{name}` — delete an inactive package.
-- `POST /admin/models/hf` — import a full model or LoRA adapter repository by name.
+- `POST /admin/models/hf` — import a LoRA adapter repository as a package.
+- `PUT /admin/models/{name}/adapters/{adapter}/archive` — add or replace one adapter.
+- `GET /admin/models/{name}/adapters/{adapter}` — inspect one stored adapter.
+- `DELETE /admin/models/{name}/adapters/{adapter}` — delete an adapter when others remain.
 
-All `/admin` requests require `X-Admin-Token`. A LoRA-only export is rejected
-when the package has no adapters or no portable `base_model` name.
+All `/admin` requests require `X-Admin-Token`. Package and adapter mutation is
+rejected while that package is active. Every adapter upload must include
+`adapter_config.json` and `.safetensors` or `.bin` weights, and its declared base
+model must match the package manifest.
 
-The schema preserves that requested policy, but the target vLLM runtime remains
-the final compatibility authority. In particular, vLLM 0.24.0's documented ARM
+The schema preserves the requested base-model policy, but the target vLLM
+runtime remains the final compatibility authority. In particular, vLLM 0.24.0's documented ARM
 CPU quantization matrix does not guarantee GGUF execution; the Linux ARM64 CPU
 image can still run supported unquantized or compressed-tensor checkpoints.
 
@@ -132,5 +143,5 @@ image can still run supported unquantized or compressed-tensor checkpoints.
 
 The Dullahan model-server wrapper is licensed under Apache-2.0. Both wrapper
 images copy `LICENSE`, `NOTICE`, and `THIRD_PARTY_NOTICES.md` into
-`/licenses/dullahan/`. Upstream base images, installed packages, model weights,
-and LoRA adapters retain their own licenses.
+`/licenses/dullahan/`. Upstream base images, remotely resolved base-model
+weights, and LoRA adapters retain their own licenses.

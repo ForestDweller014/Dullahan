@@ -34,7 +34,7 @@ class ResolvedInferencePlan(BaseModel):
     container_backend: str | None = None
     admin_base_url: str | None = None
     admin_token_env: str | None = None
-    model_export_mode: str = "full"
+    model_export_mode: str = "lora_only"
     max_loras: int = 4
     max_cpu_loras: int = 8
     activation_extra_args: list[str] = Field(default_factory=list)

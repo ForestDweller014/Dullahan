@@ -11,16 +11,6 @@ from fastapi.testclient import TestClient
 from server import app as model_server
 
 
-def model_directory(path: Path, *, quantization: str | None = None) -> Path:
-    path.mkdir()
-    config = {}
-    if quantization:
-        config["quantization_config"] = {"quant_method": quantization}
-    (path / "config.json").write_text(json.dumps(config), encoding="utf-8")
-    (path / "model.safetensors").write_bytes(b"weights")
-    return path
-
-
 def add_adapter(path: Path, name: str = "legal", base_model: str = "Qwen/Qwen3-8B") -> Path:
     adapter = path / "adapters" / name
     adapter.mkdir(parents=True)
@@ -30,6 +20,27 @@ def add_adapter(path: Path, name: str = "legal", base_model: str = "Qwen/Qwen3-8
     )
     (adapter / "adapter_model.safetensors").write_bytes(b"adapter-weights")
     return adapter
+
+
+def adapter_package(
+    path: Path,
+    *,
+    name: str = "expert",
+    adapter_name: str = "legal",
+    base_model: str = "Qwen/Qwen3-8B",
+    quantization: str | None = None,
+) -> Path:
+    path.mkdir(parents=True)
+    add_adapter(path, name=adapter_name, base_model=base_model)
+    model_server.prepare_manifest(
+        path,
+        name=name,
+        source="test",
+        package_mode="lora_only",
+        base_model=base_model,
+        quantization=quantization,
+    )
+    return path
 
 
 def archive_bytes(path: Path) -> bytes:
@@ -50,9 +61,8 @@ def test_cuda_quantization_defaults_to_cuda_only(
     tmp_path: Path,
     quantization: str,
 ) -> None:
-    model = model_directory(tmp_path / "model", quantization=quantization)
-
-    manifest = model_server.prepare_manifest(model, name="expert", source="test")
+    package = adapter_package(tmp_path / "expert", quantization=quantization)
+    manifest = model_server.model_manifest(package)
 
     assert manifest["quantization"] == quantization
     assert manifest["supported_backends"] == ["cuda"]
@@ -60,17 +70,19 @@ def test_cuda_quantization_defaults_to_cuda_only(
 
 # Verifies that GGUF packages default to both CPU and CUDA backend support.
 def test_gguf_defaults_to_cpu_and_cuda(tmp_path: Path) -> None:
-    model = tmp_path / "model"
-    model.mkdir()
-    (model / "config.json").write_text("{}", encoding="utf-8")
-    gguf = model / "expert.gguf"
-    gguf.write_bytes(b"weights")
-
-    manifest = model_server.prepare_manifest(model, name="expert", source="test")
+    package = adapter_package(
+        tmp_path / "expert",
+        base_model="Qwen/Qwen2.5-7B-Instruct-GGUF",
+        quantization="gguf",
+    )
+    manifest = model_server.model_manifest(package)
 
     assert manifest["quantization"] == "gguf"
     assert manifest["supported_backends"] == ["cpu", "cuda"]
-    assert model_server.launch_model_path(model, manifest) == gguf
+    assert (
+        model_server.launch_model_path(package, manifest)
+        == "Qwen/Qwen2.5-7B-Instruct-GGUF"
+    )
 
 
 # Verifies that CPU rejects CUDA only checkpoint.
@@ -107,16 +119,9 @@ def test_activation_cannot_override_manager_flags(args: list[str]) -> None:
 
 # Verifies that LoRA only package uses named base and stored adapters.
 def test_lora_only_package_uses_named_base_and_stored_adapters(tmp_path: Path) -> None:
-    package = tmp_path / "expert"
-    package.mkdir()
-    adapter = add_adapter(package)
-    manifest = model_server.prepare_manifest(
-        package,
-        name="expert",
-        source="test",
-        package_mode="lora_only",
-        base_model="Qwen/Qwen3-8B",
-    )
+    package = adapter_package(tmp_path / "expert")
+    adapter = package / "adapters" / "legal"
+    manifest = model_server.model_manifest(package)
 
     model_server.validate_model_package(package)
 
@@ -144,8 +149,9 @@ def test_activation_command_loads_named_base_and_lora_adapters(
 ) -> None:
     storage = tmp_path / "models"
     package = storage / "expert"
-    package.mkdir(parents=True)
-    adapter = add_adapter(package)
+    adapter_package(package)
+    adapter = package / "adapters" / "legal"
+    second_adapter = add_adapter(package, name="finance")
     model_server.prepare_manifest(
         package,
         name="expert",
@@ -197,6 +203,7 @@ def test_activation_command_loads_named_base_and_lora_adapters(
     assert command[command.index("--max-loras") + 1] == "4"
     assert command[command.index("--max-cpu-loras") + 1] == "8"
     assert f"legal={adapter.resolve()}" in command
+    assert f"finance={second_adapter.resolve()}" in command
 
 
 # Verifies that activation rejects invalid LoRA capacity.
@@ -205,7 +212,7 @@ def test_activation_rejects_invalid_lora_capacity() -> None:
         model_server.ActivateRequest(max_loras=8, max_cpu_loras=4)
 
 
-# Verifies that model crud metadata and LoRA only export round trip.
+# Verifies that model CRUD stores and round-trips only manifests and LoRA adapter files.
 def test_model_crud_metadata_and_lora_only_export_round_trip(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -216,14 +223,7 @@ def test_model_crud_metadata_and_lora_only_export_round_trip(
     monkeypatch.setattr(model_server, "ADMIN_TOKEN", "a" * 32)
     monkeypatch.setattr(model_server, "_active_model", None)
 
-    source = model_directory(tmp_path / "source")
-    add_adapter(source)
-    model_server.prepare_manifest(
-        source,
-        name="expert",
-        source="test",
-        base_model="Qwen/Qwen3-8B",
-    )
+    source = adapter_package(tmp_path / "source")
     headers = {"X-Admin-Token": "a" * 32}
 
     with TestClient(model_server.app) as client:
@@ -238,8 +238,12 @@ def test_model_crud_metadata_and_lora_only_export_round_trip(
         assert metadata.status_code == 200
         body = metadata.json()
         assert body["name"] == "expert"
+        assert body["storage_directory"] == str((storage / "expert").resolve())
         assert body["manifest"]["base_model"] == "Qwen/Qwen3-8B"
         assert body["adapters"][0]["name"] == "legal"
+        assert body["adapters"][0]["storage_path"] == str(
+            (storage / "expert" / "adapters" / "legal").resolve()
+        )
 
         updated = client.put(
             "/admin/models/expert/archive?replace=true",
@@ -249,13 +253,7 @@ def test_model_crud_metadata_and_lora_only_export_round_trip(
         assert updated.status_code == 201
 
         full_export = client.get("/admin/models/expert/archive?mode=full", headers=headers)
-        assert full_export.status_code == 200
-        full_archive = tmp_path / "full.tar.gz"
-        full_archive.write_bytes(full_export.content)
-        with tarfile.open(full_archive, "r:gz") as stream:
-            full_names = set(stream.getnames())
-        assert "expert/model.safetensors" in full_names
-        assert "expert/adapters/legal/adapter_model.safetensors" in full_names
+        assert full_export.status_code == 400
 
         exported = client.get(
             "/admin/models/expert/archive?mode=lora_only",
@@ -289,6 +287,79 @@ def test_model_crud_metadata_and_lora_only_export_round_trip(
         assert restored_metadata["manifest"]["package_mode"] == "lora_only"
         assert restored_metadata["manifest"]["base_model"] == "Qwen/Qwen3-8B"
         assert [adapter["name"] for adapter in restored_metadata["adapters"]] == ["legal"]
+
+
+# Verifies that package uploads reject base-model files in the persistent CRUD store.
+def test_model_upload_rejects_base_checkpoint_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = tmp_path / "models"
+    storage.mkdir()
+    monkeypatch.setattr(model_server, "MODEL_ROOT", storage)
+    monkeypatch.setattr(model_server, "ADMIN_TOKEN", "a" * 32)
+    source = adapter_package(tmp_path / "source")
+    (source / "model.safetensors").write_bytes(b"base-weights")
+
+    with TestClient(model_server.app) as client:
+        response = client.put(
+            "/admin/models/expert/archive",
+            headers={"X-Admin-Token": "a" * 32},
+            files={"file": ("expert.tar.gz", archive_bytes(source), "application/gzip")},
+        )
+
+    assert response.status_code == 400
+    assert "adapter-only" in response.json()["detail"]
+    assert not (storage / "expert").exists()
+
+
+# Verifies adapter-level CRUD stores complete adapter archives and updates package metadata.
+def test_adapter_crud_uploads_and_deletes_named_lora_weights(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = tmp_path / "models"
+    storage.mkdir()
+    package = adapter_package(storage / "expert")
+    monkeypatch.setattr(model_server, "MODEL_ROOT", storage)
+    monkeypatch.setattr(model_server, "ADMIN_TOKEN", "a" * 32)
+    monkeypatch.setattr(model_server, "_active_model", None)
+    source_package = tmp_path / "source"
+    source_package.mkdir()
+    source = add_adapter(source_package, name="finance")
+    (source / "training_metadata.json").write_text('{"rank": 16}', encoding="utf-8")
+    headers = {"X-Admin-Token": "a" * 32}
+
+    with TestClient(model_server.app) as client:
+        created = client.put(
+            "/admin/models/expert/adapters/finance/archive",
+            headers=headers,
+            files={"file": ("finance.tar.gz", archive_bytes(source), "application/gzip")},
+        )
+        assert created.status_code == 201
+        adapter = created.json()["adapter"]
+        assert adapter["name"] == "finance"
+        assert adapter["storage_path"] == str(
+            (storage / "expert" / "adapters" / "finance").resolve()
+        )
+        assert (package / "adapters" / "finance" / "adapter_model.safetensors").is_file()
+        assert (package / "adapters" / "finance" / "training_metadata.json").is_file()
+
+        fetched = client.get(
+            "/admin/models/expert/adapters/finance",
+            headers=headers,
+        )
+        assert fetched.status_code == 200
+        assert fetched.json()["bytes"] > 0
+
+        deleted = client.delete(
+            "/admin/models/expert/adapters/finance",
+            headers=headers,
+        )
+        assert deleted.status_code == 200
+
+        metadata = client.get("/admin/models/expert", headers=headers).json()
+        assert [adapter["name"] for adapter in metadata["adapters"]] == ["legal"]
 
 
 # Verifies that get model metadata requires auth and returns 404.

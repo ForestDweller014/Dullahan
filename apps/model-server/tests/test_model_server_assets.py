@@ -21,10 +21,11 @@ def test_compose_variants_declare_matching_backends() -> None:
         compose = yaml.safe_load((ROOT / f"compose.{backend}.yaml").read_text())
         service = next(iter(compose["services"].values()))
         assert service["environment"]["DULLAHAN_BACKEND"] == backend
-        assert service["environment"]["MODEL_EXPORT_MODE"] == "${MODEL_EXPORT_MODE:-full}"
         assert service["environment"]["VLLM_MAX_LORAS"] == "${VLLM_MAX_LORAS:-4}"
         assert service["environment"]["VLLM_MAX_CPU_LORAS"] == "${VLLM_MAX_CPU_LORAS:-8}"
         assert service["build"]["dockerfile"] == f"Dockerfile.{backend}"
+        assert service["volumes"][0] == f"{backend}-models:/models"
+        assert service["volumes"][1] == "hf-cache:/root/.cache/huggingface"
 
 
 # Verifies that local env is excluded from build context.

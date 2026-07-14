@@ -81,8 +81,8 @@ model_server:
   enabled: false
   model: qwen-local
   admin_token_env: MODEL_ADMIN_TOKEN
-  # full includes base weights and adapters; lora_only includes the named base reference + adapters.
-  export_mode: full
+  # Expert packages contain only the named base reference and LoRA adapter files.
+  export_mode: lora_only
   # Distinct LoRA adapters that may share one vLLM batch and remain cached in host memory.
   max_loras: 4
   max_cpu_loras: 8

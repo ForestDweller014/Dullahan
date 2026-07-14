@@ -30,7 +30,6 @@ class QuantizationMode(StrEnum):
 
 
 class ModelExportMode(StrEnum):
-    FULL = "full"
     LORA_ONLY = "lora_only"
 
 
@@ -140,7 +139,7 @@ class ModelServerConfig(BaseModel):
     enabled: bool = False
     model: str = "qwen-local"
     admin_token_env: str = "MODEL_ADMIN_TOKEN"
-    export_mode: ModelExportMode = ModelExportMode.FULL
+    export_mode: ModelExportMode = ModelExportMode.LORA_ONLY
     max_loras: int = Field(default=4, ge=1)
     max_cpu_loras: int = Field(default=8, ge=1)
     activation_extra_args: list[str] = Field(default_factory=list)

@@ -1,53 +1,179 @@
 # Dullahan
 
-Dullahan is an experimental app that orchestrates an agent swarm that performs
-hierarchical task execution by dispatching specialized SLM-based agents to a
-clustered, dynamically growing and morphing context graph to solve complex tasks
-with reliable context control and modular expert delegation.
+Dullahan is an experimental architecture for turning an organization's scattered
+knowledge into coordinated, inspectable work. Most teams do not suffer from a
+shortage of information. They suffer because the right evidence is trapped in a
+repository, document, file, or database row when a decision has to be made—and
+because simply pouring all of it into one enormous prompt makes the result more
+expensive, less focused, and harder to trust.
 
-It is built for tasks where the hard part is not a single model call, but keeping
-many smaller reasoning steps grounded in the right local context. Dullahan stores
-knowledge as graph memory, partitions that memory into expert-owned clusters,
-uses a Context Augmentation Layer (CAL) to build bounded context for each
-subquery, and uses an Expert Dispatch Layer (EDL) to route work to the most
-relevant specialist agent.
+Dullahan approaches that problem as if it were building a high-performing firm.
+It creates a durable map of what the organization knows, divides that landscape
+into areas of expertise, gives each task only the context it needs, and assigns it
+to the most relevant specialist. A coordinating agent keeps the work moving,
+specialists can open focused lines of inquiry, and every important step leaves an
+artifact behind. The result is not just an answer, but a visible account of how
+the system arrived there.
 
-The project is intentionally modular: CAL, EDL, the agent runtime, the graph
-builder, MCP tools, and filesystem memory all communicate through typed
-contracts from `packages/shared`.
+The architectural bet is simple: useful AI depends as much on managing context
+and responsibility as it does on choosing a model. Dullahan is therefore designed
+around controlled context, modular specialists, shared base-model capacity, and
+persistent project memory rather than one opaque model call.
 
-## Why This Exists
+## From Source Material To An Answer
 
-Large tasks often fail because context is too broad, too stale, or too entangled.
-Dullahan explores a different pattern:
+Imagine Dullahan joining a project for the first time. The project already has a
+history: source code and configuration in repositories, product and research
+documents, loose Markdown files, and operational facts stored as rows in
+PostgreSQL. Those materials remain the source of truth. Dullahan does not try to
+replace them with a new proprietary vault. Instead, it builds a navigational layer
+over them so that an agent can find relationships that no folder tree, keyword
+search, or database table can explain on its own.
 
-1. Break a root task into bounded subqueries.
-2. Retrieve only the context each subquery needs from parent reasoning and
-   long-term graph memory.
-3. Route the contextualized subquery to a specialized expert.
-4. Let experts recursively ask their own subquestions when needed.
-5. Persist the execution as inspectable YAML and Markdown.
+### The offline knowledge build creates the map
 
-The aim is reliable context control: each expert receives a focused slice of the
-world instead of a giant prompt, and each step leaves behind artifacts that can be
-audited, replayed, or used for later distillation.
+That journey begins with Graphify and `apps/graph-builder`. Graphify reads files,
+documents, and repositories and identifies the concepts and relationships that
+connect them. When the source is PostgreSQL, the graph-builder can export selected
+rows into temporary, human-readable Markdown so the same offline process can
+understand database knowledge without coupling every future answer to a live
+production system. This separation matters: teams can build and review knowledge
+deliberately, protect operational databases from unpredictable agent traffic, and
+still preserve the meaning and provenance of the original rows.
 
-## What Is In The Repo
+`packages/kg` turns that material into a knowledge graph and partitions the graph
+into coherent neighborhoods. Those neighborhoods are more than search buckets.
+They become the foundations of expertise: the system writes cluster documents
+that describe each domain and produces an expert registry that says which
+specialist owns it. `packages/world-state` then makes the graph-backed documents
+retrievable by meaning, using either a lightweight local index or PostgreSQL with
+pgvector when a larger shared deployment needs it.
 
-| Area | Purpose |
-| --- | --- |
-| `apps/agent-runtime` | Recursive hierarchical execution loop, CLI, local and HTTP CAL/EDL tools, tracing, artifacts. |
-| `apps/cal` | Context Augmentation Layer. Merges parent context with WorldStateDB retrieval and enforces token budgets. |
-| `apps/edl` | Expert Dispatch Layer. Routes subqueries to experts with embedding attention and runs expert instances. |
-| `apps/graph-builder` | Builds K-sized graph clusters and can derive `experts.yaml` from those clusters. |
-| `apps/inference` | Resolves CPU/CUDA policy and serves Qwen through vLLM or an Ollama compatibility proxy. |
-| `apps/model-server` | Builds and runs the two persistent vLLM model-manager containers: Linux CPU and NVIDIA CUDA. |
-| `apps/mcp-servers` | Dependency-light stdio JSON-RPC MCP surfaces for `send_to_CAL` and `send_to_EDL`. |
-| `packages/kg` | Knowledge graph model, YAML graph storage, and K-partitioning. |
-| `packages/world-state` | Local persistent vector index over graph-backed Markdown documents. |
-| `packages/shared` | Pydantic schemas, IDs, inference-backed embedding/tokenization clients, and retrieval helpers. |
-| `memory/` | Seed graph, cluster docs, expert registry, execution artifacts, and local indexes. |
-| `configs/` | Runtime recursion, retrieval, routing, and local configuration. |
+This is the first important distinction in Dullahan's context story. A source
+PostgreSQL database contributes business knowledge to the offline build; the
+optional WorldState PostgreSQL database is an operational retrieval service for
+the memory that build produced. One is an input to understand. The other is a way
+to serve the resulting memory efficiently.
+
+The outputs live under `memory/`: the graph, cluster documents, expert registry,
+retrieval indexes, and later the records of completed executions. This persistent
+project memory is not a transcript of everything an agent has ever seen. It is a
+curated working map that can survive across runs, be inspected by a person, and be
+rebuilt when the underlying sources change. That solves a common failure mode in
+agent systems: every new session no longer has to rediscover the organization from
+scratch.
+
+### The agent runtime turns a question into managed work
+
+When a person submits a question, `apps/agent-runtime` acts like the engagement
+lead. Its planner decides whether the problem can be answered directly or should
+be broken into smaller subqueries. Its recursive execution loop allows those
+subqueries to open their own bounded investigations, while configured depth,
+branching, and budget limits prevent the work from expanding without control.
+
+The runtime's tool layer is how it asks for context and expertise. Its aggregation
+layer brings specialist responses back into one coherent answer. Its tracing and
+artifact components preserve the execution as readable YAML and Markdown. These
+submodules exist for the same reason a well-run project separates planning,
+research, delivery, and record keeping: each responsibility can evolve or be
+audited without turning the entire system into a single inseparable agent loop.
+
+### CAL gives each task a useful field of view
+
+Before a specialist sees a subquery, `apps/cal`—the Context Augmentation
+Layer—builds its working brief. CAL combines the useful conclusions from the
+parent task with relevant material from WorldState, removes duplicate or weak
+context, and respects a token budget. Its retrieval, merging, and budgeting
+submodules are deliberately separate because relevance is not the same thing as
+volume. The goal is to give a specialist enough evidence to reason well without
+burying the assignment inside the entire project archive.
+
+That bounded `ContextBundle` is one of Dullahan's central design choices. It makes
+context a managed asset with a visible origin, not an invisible side effect of a
+large prompt. It also means a team can improve retrieval or budgeting without
+rewriting the planner or the expert models.
+
+### EDL staffs the task with the right specialist
+
+`apps/edl`—the Expert Dispatch Layer—receives that brief and decides who should
+handle it. Its registry loads the experts created from the knowledge graph. Its
+attention router compares the subquery with each expert's domain description. Its
+gate enforces the capacity promised by each expert profile, and its prompt builder,
+runner, and provider turn the selected role and context into a model request.
+
+This is closer to staffing a case team than broadcasting a prompt to a swarm.
+Only the most relevant expert is selected for a given subquery, the route is
+recorded, and `max_concurrency` limits how many instances of that expert may run
+at once. Excess work waits for that specialist while unrelated experts retain
+their own capacity. That protects expensive inference resources without forcing
+the whole organization of agents into a single global queue.
+
+Out of the box, an expert is differentiated by its cluster-derived role context:
+what it knows, what it is responsible for, and which model identity it requests.
+The same registry can also point those identities at LoRA adapters, allowing
+specialists to gain weight-level behavior without storing a full foundation model
+for every role. Role documents make specialization immediate and inspectable;
+LoRA adapters provide a path to deeper learned specialization when training data
+is available.
+
+### The inference layer turns policy into capacity
+
+`apps/inference` is the operations layer beneath those specialists. It translates
+configuration into an explicit serving plan: CPU or CUDA, direct vLLM or an
+Ollama-compatible route, local execution or an offloaded endpoint. Its device,
+configuration, planning, tokenization, proxy, and benchmarking components keep
+hardware policy out of the agent's reasoning. The agent asks for a model identity;
+the inference layer decides how that request can be served.
+
+`apps/model-server` owns the longer-lived model lifecycle. Its CPU and CUDA
+services can receive, inspect, activate, and remove expert packages through a
+small administrative API. The package store is intentionally adapter-only. Each
+server keeps LoRA packages under `/models/<package>/adapters/<adapter>/`, while
+the shared base model is named in the package manifest and resolved through the
+separate runtime cache. Dullahan therefore does not duplicate billions of base
+weights every time a new expert is created. Many specialist adapters can share a
+compatible base model; a different base-model family requires its own serving
+capacity.
+
+This boundary also explains the two levels of concurrency in the project. EDL
+controls how much work may be assigned to an expert, while the inference server
+controls how that admitted work uses the underlying hardware. Separating those
+concerns lets Dullahan scale specialist demand without pretending that compute is
+unlimited.
+
+### The answer becomes part of the project's history
+
+As specialist responses return, the agent runtime's aggregation layer assembles
+them into the final result. Citations, routing decisions, model metadata, and the
+shape of the recursive execution can be persisted alongside the answer. The
+execution artifact store is therefore more than logging: it is the project's
+institutional record of what was asked, which evidence was used, which expert was
+trusted, and what the system concluded.
+
+That record supports review today and improvement tomorrow. A team can inspect a
+weak route, rebuild memory after its sources change, replay a task against a new
+model, or use successful traces as material for future evaluation and
+distillation. Dullahan's memory is cyclical: source knowledge informs the graph,
+the graph informs the experts, experts produce artifacts, and those artifacts help
+the organization improve the next run.
+
+### The connective tissue keeps the system replaceable
+
+The remaining modules make that journey usable outside a demo. `apps/mcp-servers`
+exposes CAL and EDL as small MCP tools so other agents and applications can request
+context or expert work without adopting the whole runtime. `packages/shared`
+provides the common contracts, identifiers, embedding and tokenization clients,
+and retrieval helpers that let independently deployed services agree on what a
+subquery, context bundle, route, and response mean. `configs/` captures the policy
+choices—recursion, retrieval, routing, inference, and capacity—that operators
+should be able to change without rewriting code.
+
+Together, these boundaries make Dullahan a platform for experimentation rather
+than a bet on one frozen stack. A team can replace the vector backend, improve the
+router, introduce a new model server, expose the capabilities through MCP, or
+change how memory is partitioned while keeping the rest of the story intact:
+understand the organization's knowledge, give each task the right field of view,
+assign accountable expertise, and preserve what happened.
 
 ## Tech Stack
 
@@ -61,6 +187,10 @@ audited, replayed, or used for later distillation.
 | Local orchestration | Docker Compose, CLI entrypoints |
 
 ## Architecture
+
+The first view is the executive summary of that journey. The following views
+then open the routing desk, the inference engine room, and finally the complete
+system without changing the underlying story.
 
 Every architecture view uses the same palette: **purple** for agent orchestration,
 **teal** for context and retrieval, **orange** for expert dispatch, **red** for
@@ -108,14 +238,15 @@ flowchart TD
 
 ### Expert Routing And Dispatch
 
-EDL loads the generated expert registry for each single or batch dispatch, scores
-the subquery against every expert's cluster-derived role context, and runs exactly
-one selected expert. Batch requests reuse the loaded registry and execute individual
-route-and-run operations concurrently while preserving request order. Once routing
-selects an expert, a service-wide per-expert gate admits at most that profile's
+Think of EDL as Dullahan's staffing desk. It loads the generated expert registry,
+compares each single or batched assignment with the specialists' cluster-derived
+roles, and sends the work to exactly one selected expert. Batch requests reuse
+the loaded registry and can move concurrently while preserving request order.
+Once routing selects an expert, a service-wide gate admits at most that profile's
 `max_concurrency` active runner invocations; excess work waits without preventing
-other experts from using their own capacity. Slots are released even when inference
-raises an error. `max_dispatch_concurrency` remains the outer batch-wide worker cap.
+other experts from using their own capacity. Slots are released even when
+inference raises an error. `max_dispatch_concurrency` remains the outer
+batch-wide worker cap.
 
 ```mermaid
 flowchart TB
@@ -171,8 +302,9 @@ flowchart TB
 
 ### Inference Module
 
-The inference app first turns declarative policy into a concrete, inspectable
-`ResolvedInferencePlan`. Serving then follows one of three paths: a direct vLLM
+The inference module is the engine room: it turns an operator's declarative
+policy into a concrete, inspectable `ResolvedInferencePlan` so agents do not have
+to reason about hardware. Serving then follows one of three paths: a direct vLLM
 process, an OpenAI-compatible Ollama proxy, or one of the persistent Docker model
 servers. The default Ollama path exposes generation, embeddings, and native
 tokenization through one Dullahan endpoint.
@@ -214,7 +346,7 @@ flowchart TB
         AdminClient["Inference admin client<br/>X-Admin-Token"]
         CpuManager["CPU manager container :8001"]
         CudaManager["CUDA manager container :8002"]
-        ModelStore["Named /models volume<br/>HF packages + LoRA adapters"]
+        ModelStore["Named /models volume<br/>adapter-only expert packages"]
         HfHub["Hugging Face Hub / archives"]
         ManagedVllm["Managed vLLM process<br/>active base model + adapters"]
         StableApi["Stable proxied /v1 generation API"]
@@ -314,7 +446,7 @@ flowchart TB
         Inference["apps/inference<br/>policy resolution, device detection,<br/>OpenAI-compatible serving/admin client"]
         Ollama["Ollama<br/>generation + embeddings"]
         DirectVllm["Direct vLLM<br/>CPU or CUDA"]
-        ModelServer["apps/model-server<br/>persistent CPU/CUDA managers,<br/>model packages and LoRA lifecycle"]
+        ModelServer["apps/model-server<br/>persistent CPU/CUDA managers,<br/>adapter packages and LoRA lifecycle"]
         ManagedVllm["Managed vLLM process"]
     end
 
@@ -598,11 +730,12 @@ port 8001 and `device: cuda` selects port 8002. Run
 `dullahan-inference activate` before sending requests to the selected `/v1`
 endpoint.
 
-The shared CPU/CUDA model manager stores complete model packages with optional
-LoRA adapters, provides authenticated package CRUD, and supports compact
-`lora_only` exports. Compact packages retain the model and adapter names but
-resolve the base checkpoint from Hugging Face when activated. Configure the
-client with `model_server.export_mode: full|lora_only`; see
+The shared CPU/CUDA model manager stores adapter-only expert packages, provides
+authenticated package and adapter CRUD, and exports only `lora_only` archives.
+Packages retain the base-model reference and adapter names but never place base
+checkpoint weights in the `/models` CRUD volume; vLLM resolves the shared base
+from Hugging Face when activated. Configure the client with
+`model_server.export_mode: lora_only`; see
 `apps/model-server/README.md` for the package layout and endpoints.
 
 For interactive practical-capability and concurrency testing, open

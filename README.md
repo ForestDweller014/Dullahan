@@ -15,165 +15,233 @@ specialists can open focused lines of inquiry, and every important step leaves a
 artifact behind. The result is not just an answer, but a visible account of how
 the system arrived there.
 
-The architectural bet is simple: useful AI depends as much on managing context
-and responsibility as it does on choosing a model. Dullahan is therefore designed
-around controlled context, modular specialists, shared base-model capacity, and
-persistent project memory rather than one opaque model call.
+## Quickstart: From Source Material To An Answer
 
-## From Source Material To An Answer
+The sequence below starts at the repository root and ends with a persisted answer.
+Commands that keep running should be opened in separate terminals. The default
+route uses Ollama behind Dullahan's inference proxy because that single endpoint
+serves the three capabilities the system needs: generation, semantic embeddings,
+and native tokenization.
 
-Imagine Dullahan joining a project for the first time. The project already has a
-history: source code and configuration in repositories, product and research
-documents, loose Markdown files, and operational facts stored as rows in
-PostgreSQL. Those materials remain the source of truth. Dullahan does not try to
-replace them with a new proprietary vault. Instead, it builds a navigational layer
-over them so that an agent can find relationships that no folder tree, keyword
-search, or database table can explain on its own.
+### 1. Install Dullahan
 
-### The offline knowledge build creates the map
+```bash
+python -m pip install -e ".[dev]"
+```
 
-That journey begins with Graphify and `apps/graph-builder`. Graphify reads files,
-documents, and repositories and identifies the concepts and relationships that
-connect them. When the source is PostgreSQL, the graph-builder can export selected
-rows into temporary, human-readable Markdown so the same offline process can
-understand database knowledge without coupling every future answer to a live
-production system. This separation matters: teams can build and review knowledge
-deliberately, protect operational databases from unpredictable agent traffic, and
-still preserve the meaning and provenance of the original rows.
+This installs `dullahan-graphify`, `dullahan-inference`, `dullahan-cal`,
+`dullahan-edl`, and `dullahan-agent` along with the MCP and benchmark commands.
 
-`packages/kg` turns that material into a knowledge graph and partitions the graph
-into coherent neighborhoods. Those neighborhoods are more than search buckets.
-They become the foundations of expertise: the system writes cluster documents
-that describe each domain and produces an expert registry that says which
-specialist owns it. `packages/world-state` then makes the graph-backed documents
-retrievable by meaning, using either a lightweight local index or PostgreSQL with
-pgvector when a larger shared deployment needs it.
+### 2. Ingest Files, Documents, Or A Repository
 
-This is the first important distinction in Dullahan's context story. A source
-PostgreSQL database contributes business knowledge to the offline build; the
-optional WorldState PostgreSQL database is an operational retrieval service for
-the memory that build produced. One is an input to understand. The other is a way
-to serve the resulting memory efficiently.
+Point `dullahan-graphify` at one file or one directory. A directory can contain
+documents, source code, configuration, or an entire repository. This is the
+file-ingestion step; Dullahan reads the supplied path and writes derived project
+memory under `memory/` rather than copying the source into a second upload store.
 
-The outputs live under `memory/`: the graph, cluster documents, expert registry,
-retrieval indexes, and later the records of completed executions. This persistent
-project memory is not a transcript of everything an agent has ever seen. It is a
-curated working map that can survive across runs, be inspected by a person, and be
-rebuilt when the underlying sources change. That solves a common failure mode in
-agent systems: every new session no longer has to rediscover the organization from
-scratch.
+```bash
+dullahan-graphify /absolute/path/to/project-material \
+  --repo-root "$PWD" \
+  --k 8
+```
 
-### The agent runtime turns a question into managed work
+The command runs Graphify, imports its graph, partitions the knowledge into
+clusters, generates the expert registry and role documents, and rebuilds the
+local WorldState index. The main outputs are:
 
-When a person submits a question, `apps/agent-runtime` acts like the engagement
-lead. Its planner decides whether the problem can be answered directly or should
-be broken into smaller subqueries. Its recursive execution loop allows those
-subqueries to open their own bounded investigations, while configured depth,
-branching, and budget limits prevent the work from expanding without control.
+```text
+memory/graph/graph.yaml
+memory/graph/clusters.yaml
+memory/graph/experts.yaml
+memory/documents/nodes/
+memory/documents/clusters/
+memory/world_state/indexes/local.json
+```
 
-The runtime's tool layer is how it asks for context and expertise. Its aggregation
-layer brings specialist responses back into one coherent answer. Its tracing and
-artifact components preserve the execution as readable YAML and Markdown. These
-submodules exist for the same reason a well-run project separates planning,
-research, delivery, and record keeping: each responsibility can evolve or be
-audited without turning the entire system into a single inseparable agent loop.
+If a Graphify graph already exists, import it without rerunning extraction:
 
-### CAL gives each task a useful field of view
+```bash
+dullahan-graphify /absolute/path/to/project-material \
+  --repo-root "$PWD" \
+  --from-graphify-json ./graphify-out/graph.json \
+  --k 8
+```
 
-Before a specialist sees a subquery, `apps/cal`—the Context Augmentation
-Layer—builds its working brief. CAL combines the useful conclusions from the
-parent task with relevant material from WorldState, removes duplicate or weak
-context, and respects a token budget. Its retrieval, merging, and budgeting
-submodules are deliberately separate because relevance is not the same thing as
-volume. The goal is to give a specialist enough evidence to reason well without
-burying the assignment inside the entire project archive.
+### 3. Or Build Memory From Source PostgreSQL Rows
 
-That bounded `ContextBundle` is one of Dullahan's central design choices. It makes
-context a managed asset with a visible origin, not an invisible side effect of a
-large prompt. It also means a team can improve retrieval or budgeting without
-rewriting the planner or the expert models.
+Use this instead of the file command when the source knowledge lives in
+PostgreSQL. The query must return `id`, `title`, `content`, and optionally
+`metadata`:
 
-### EDL staffs the task with the right specialist
+```bash
+dullahan-graphify \
+  --repo-root "$PWD" \
+  --postgres-dsn postgresql://dullahan:dullahan@127.0.0.1:5432/dullahan \
+  --postgres-query "select id, title, content, metadata from research_notes order by id" \
+  --postgres-export-dir memory/postgres_context \
+  --k 8
+```
 
-`apps/edl`—the Expert Dispatch Layer—receives that brief and decides who should
-handle it. Its registry loads the experts created from the knowledge graph. Its
-attention router compares the subquery with each expert's domain description. Its
-gate enforces the capacity promised by each expert profile, and its prompt builder,
-runner, and provider turn the selected role and context into a model request.
+The selected rows are exported as readable Markdown, then pass through exactly
+the same offline graph, clustering, expert-generation, and WorldState build as
+file inputs. This source database is different from the optional pgvector
+database that CAL can use later as a live retrieval backend.
 
-This is closer to staffing a case team than broadcasting a prompt to a swarm.
-Only the most relevant expert is selected for a given subquery, the route is
-recorded, and `max_concurrency` limits how many instances of that expert may run
-at once. Excess work waits for that specialist while unrelated experts retain
-their own capacity. That protects expensive inference resources without forcing
-the whole organization of agents into a single global queue.
+### 4. Start The Recommended Inference Stack
 
-Out of the box, an expert is differentiated by its cluster-derived role context:
-what it knows, what it is responsible for, and which model identity it requests.
-The same registry can also point those identities at LoRA adapters, allowing
-specialists to gain weight-level behavior without storing a full foundation model
-for every role. Role documents make specialization immediate and inspectable;
-LoRA adapters provide a path to deeper learned specialization when training data
-is available.
+Install Ollama, then pull the configured generation and embedding models:
 
-### The inference layer turns policy into capacity
+```bash
+ollama pull qwen3:8b
+ollama pull qwen3-embedding:0.6b
+ollama serve
+```
 
-`apps/inference` is the operations layer beneath those specialists. It translates
-configuration into an explicit serving plan: CPU or CUDA, direct vLLM or an
-Ollama-compatible route, local execution or an offloaded endpoint. Its device,
-configuration, planning, tokenization, proxy, and benchmarking components keep
-hardware policy out of the agent's reasoning. The agent asks for a model identity;
-the inference layer decides how that request can be served.
+Leave Ollama running. In a second terminal, inspect the resolved hardware plan
+and start Dullahan's OpenAI-compatible proxy on port `30000`:
 
-`apps/model-server` owns the longer-lived model lifecycle. Its CPU and CUDA
-services can receive, inspect, activate, and remove expert packages through a
-small administrative API. The package store is intentionally adapter-only. Each
-server keeps LoRA packages under `/models/<package>/adapters/<adapter>/`, while
-the shared base model is named in the package manifest and resolved through the
-separate runtime cache. Dullahan therefore does not duplicate billions of base
-weights every time a new expert is created. Many specialist adapters can share a
-compatible base model; a different base-model family requires its own serving
-capacity.
+```bash
+cd /absolute/path/to/Dullahan
+dullahan-inference plan --config configs/inference.yaml
+dullahan-inference serve --config configs/inference.yaml
+```
 
-This boundary also explains the two levels of concurrency in the project. EDL
-controls how much work may be assigned to an expert, while the inference server
-controls how that admitted work uses the underlying hardware. Separating those
-concerns lets Dullahan scale specialist demand without pretending that compute is
-unlimited.
+The repository defaults already point the agent runtime, CAL, and EDL at this
+endpoint. These exports make that connection explicit and are useful when
+launching commands from different shells:
 
-### The answer becomes part of the project's history
+```bash
+export DULLAHAN_INFERENCE_BASE_URL=http://127.0.0.1:30000/v1
+export EDL_MODEL_PROVIDER=http
+export EDL_MODEL_BASE_URL=http://127.0.0.1:30000/v1
+export AGENT_PLANNER_PROVIDER=http
+export AGENT_PLANNER_BASE_URL=http://127.0.0.1:30000/v1
+export AGENT_SYNTHESIS_PROVIDER=http
+export AGENT_SYNTHESIS_BASE_URL=http://127.0.0.1:30000/v1
+```
 
-As specialist responses return, the agent runtime's aggregation layer assembles
-them into the final result. Citations, routing decisions, model metadata, and the
-shape of the recursive execution can be persisted alongside the answer. The
-execution artifact store is therefore more than logging: it is the project's
-institutional record of what was asked, which evidence was used, which expert was
-trusted, and what the system concluded.
+To host Qwen directly with vLLM instead, change `provider` to `qwen` in
+`configs/inference.yaml`, install the platform-appropriate vLLM build, and run
+the same `plan` and `serve` commands. Automatic policy selects GPTQ for CUDA and
+GGUF for CPU unless the configuration overrides it. Direct vLLM is the
+generation route; a complete deployment must still provide the configured
+embedding and tokenization capabilities, which is why the combined Ollama proxy
+is the recommended first run.
 
-That record supports review today and improvement tomorrow. A team can inspect a
-weak route, rebuild memory after its sources change, replay a task against a new
-model, or use successful traces as material for future evaluation and
-distillation. Dullahan's memory is cyclical: source knowledge informs the graph,
-the graph informs the experts, experts produce artifacts, and those artifacts help
-the organization improve the next run.
+### 5. Solve A Prompt
 
-### The connective tissue keeps the system replaceable
+The simplest execution keeps CAL and EDL in the agent process. With the inference
+proxy still running, open another terminal from the repository root:
 
-The remaining modules make that journey usable outside a demo. `apps/mcp-servers`
-exposes CAL and EDL as small MCP tools so other agents and applications can request
-context or expert work without adopting the whole runtime. `packages/shared`
-provides the common contracts, identifiers, embedding and tokenization clients,
-and retrieval helpers that let independently deployed services agree on what a
-subquery, context bundle, route, and response mean. `configs/` captures the policy
-choices—recursion, retrieval, routing, inference, and capacity—that operators
-should be able to change without rewriting code.
+```bash
+dullahan-agent \
+  "Assess whether a long-volatility strategy is attractive before this week's major earnings releases" \
+  --repo-root "$PWD" \
+  --max-depth 2 \
+  --max-breadth 3 \
+  --max-total-instances 12 \
+  --persist-artifacts
+```
 
-Together, these boundaries make Dullahan a platform for experimentation rather
-than a bet on one frozen stack. A team can replace the vector backend, improve the
-router, introduce a new model server, expose the capabilities through MCP, or
-change how memory is partitioned while keeping the rest of the story intact:
-understand the organization's knowledge, give each task the right field of view,
-assign accountable expertise, and preserve what happened.
+Add `--json` when a machine-readable result is more useful than the concise
+terminal response. Persisted runs are written under
+`memory/executions/<trace_id>/`.
+
+### 6. Run CAL And EDL As Separate Services
+
+For a service-oriented deployment, start CAL and EDL in separate terminals with
+the same inference environment shown above:
+
+```bash
+cd /absolute/path/to/Dullahan
+dullahan-cal
+```
+
+```bash
+cd /absolute/path/to/Dullahan
+dullahan-edl
+```
+
+Then tell the agent to use HTTP transport:
+
+```bash
+dullahan-agent \
+  "Evaluate whether a steepener trade makes sense given inflation, growth, and Fed-path assumptions" \
+  --repo-root "$PWD" \
+  --transport http \
+  --cal-url http://127.0.0.1:8100 \
+  --edl-url http://127.0.0.1:8200 \
+  --tool-timeout-seconds 120 \
+  --max-depth 1 \
+  --persist-artifacts
+```
+
+`dullahan-cal` listens on `8100` and `dullahan-edl` on `8200`. The local and
+HTTP modes use the same context and expert contracts; the difference is only
+whether those responsibilities share a process.
+
+### 7. Optional: Run A Persistent CPU Or CUDA Model Manager
+
+The persistent managers are the LoRA package lifecycle path. They are not needed
+for the recommended Ollama quickstart. Create the ignored environment file and
+set `MODEL_ADMIN_TOKEN`; set `HF_TOKEN` too when the declared base model requires
+it:
+
+```bash
+cp apps/model-server/.env.example apps/model-server/.env
+```
+
+For Apple Silicon or another Linux ARM64 CPU target:
+
+```bash
+cd apps/model-server
+PLATFORM=linux/arm64 ./scripts/build-base.sh cpu
+docker compose --env-file .env -f compose.cpu.yaml build
+docker compose --env-file .env -f compose.cpu.yaml up -d
+cd ../..
+```
+
+For an NVIDIA CUDA host, use the CUDA variant instead:
+
+```bash
+cd apps/model-server
+./scripts/build-base.sh cuda
+docker compose --env-file .env -f compose.cuda.yaml build
+docker compose --env-file .env -f compose.cuda.yaml up -d
+cd ../..
+```
+
+The CPU manager is available at `http://127.0.0.1:8001`; CUDA uses `8002`.
+Upload an adapter-only package containing `dullahan-model.json` and one or more
+`adapters/<name>/` directories:
+
+```bash
+export MODEL_SERVER_URL=http://127.0.0.1:8001
+export MODEL_ADMIN_TOKEN='the-value-from-apps/model-server/.env'
+
+curl --fail-with-body --request PUT \
+  --header "X-Admin-Token: $MODEL_ADMIN_TOKEN" \
+  --form "file=@./qwen-local.tar.gz;type=application/gzip" \
+  "$MODEL_SERVER_URL/admin/models/qwen-local/archive"
+```
+
+Set `model_server.enabled: true`, `model_server.model: qwen-local`, and the
+matching `device: cpu` or `device: cuda` in `configs/inference.yaml`. Then inspect
+and activate the stored package:
+
+```bash
+dullahan-inference plan --config configs/inference.yaml
+dullahan-inference metadata --config configs/inference.yaml
+dullahan-inference activate --config configs/inference.yaml
+```
+
+Activation resolves the shared base model outside `/models`, registers every
+stored LoRA adapter, and exposes the active generation API through the manager's
+`/v1` route. The current EDL configuration uses one base URL for both expert
+generation and routing embeddings, so a model manager becomes an end-to-end EDL
+endpoint only when it, or a gateway in front of it, serves both capabilities.
+See `apps/model-server/README.md` for adapter-level CRUD, exports, and the
+complete package schema.
 
 ## Tech Stack
 
@@ -566,6 +634,166 @@ The key runtime contracts are:
 | `ExpertResponse` | The answer returned by an expert for one contextualized subquery. |
 | `ExecutionSpan` | Trace metadata for runtime, CAL, EDL, timeout, and subquery events. |
 
+## From Source Material To An Answer
+
+The architectural bet is simple: useful AI depends as much on managing context
+and responsibility as it does on choosing a model. Dullahan is therefore designed
+around controlled context, modular specialists, shared base-model capacity, and
+persistent project memory rather than one opaque model call.
+
+Imagine Dullahan joining a project for the first time. The project already has a
+history: source code and configuration in repositories, product and research
+documents, loose Markdown files, and operational facts stored as rows in
+PostgreSQL. Those materials remain the source of truth. Dullahan does not try to
+replace them with a new proprietary vault. Instead, it builds a navigational layer
+over them so that an agent can find relationships that no folder tree, keyword
+search, or database table can explain on its own.
+
+### The offline knowledge build creates the map
+
+That journey begins with Graphify and `apps/graph-builder`. Graphify reads files,
+documents, and repositories and identifies the concepts and relationships that
+connect them. When the source is PostgreSQL, the graph-builder can export selected
+rows into temporary, human-readable Markdown so the same offline process can
+understand database knowledge without coupling every future answer to a live
+production system. This separation matters: teams can build and review knowledge
+deliberately, protect operational databases from unpredictable agent traffic, and
+still preserve the meaning and provenance of the original rows.
+
+`packages/kg` turns that material into a knowledge graph and partitions the graph
+into coherent neighborhoods. Those neighborhoods are more than search buckets.
+They become the foundations of expertise: the system writes cluster documents
+that describe each domain and produces an expert registry that says which
+specialist owns it. `packages/world-state` then makes the graph-backed documents
+retrievable by meaning, using either a lightweight local index or PostgreSQL with
+pgvector when a larger shared deployment needs it.
+
+This is the first important distinction in Dullahan's context story. A source
+PostgreSQL database contributes business knowledge to the offline build; the
+optional WorldState PostgreSQL database is an operational retrieval service for
+the memory that build produced. One is an input to understand. The other is a way
+to serve the resulting memory efficiently.
+
+The outputs live under `memory/`: the graph, cluster documents, expert registry,
+retrieval indexes, and later the records of completed executions. This persistent
+project memory is not a transcript of everything an agent has ever seen. It is a
+curated working map that can survive across runs, be inspected by a person, and be
+rebuilt when the underlying sources change. That solves a common failure mode in
+agent systems: every new session no longer has to rediscover the organization from
+scratch.
+
+### The agent runtime turns a question into managed work
+
+When a person submits a question, `apps/agent-runtime` acts like the engagement
+lead. Its planner decides whether the problem can be answered directly or should
+be broken into smaller subqueries. Its recursive execution loop allows those
+subqueries to open their own bounded investigations, while configured depth,
+branching, and budget limits prevent the work from expanding without control.
+
+The runtime's tool layer is how it asks for context and expertise. Its aggregation
+layer brings specialist responses back into one coherent answer. Its tracing and
+artifact components preserve the execution as readable YAML and Markdown. These
+submodules exist for the same reason a well-run project separates planning,
+research, delivery, and record keeping: each responsibility can evolve or be
+audited without turning the entire system into a single inseparable agent loop.
+
+### CAL gives each task a useful field of view
+
+Before a specialist sees a subquery, `apps/cal`—the Context Augmentation
+Layer—builds its working brief. CAL combines the useful conclusions from the
+parent task with relevant material from WorldState, removes duplicate or weak
+context, and respects a token budget. Its retrieval, merging, and budgeting
+submodules are deliberately separate because relevance is not the same thing as
+volume. The goal is to give a specialist enough evidence to reason well without
+burying the assignment inside the entire project archive.
+
+That bounded `ContextBundle` is one of Dullahan's central design choices. It makes
+context a managed asset with a visible origin, not an invisible side effect of a
+large prompt. It also means a team can improve retrieval or budgeting without
+rewriting the planner or the expert models.
+
+### EDL staffs the task with the right specialist
+
+`apps/edl`—the Expert Dispatch Layer—receives that brief and decides who should
+handle it. Its registry loads the experts created from the knowledge graph. Its
+attention router compares the subquery with each expert's domain description. Its
+gate enforces the capacity promised by each expert profile, and its prompt builder,
+runner, and provider turn the selected role and context into a model request.
+
+This is closer to staffing a case team than broadcasting a prompt to a swarm.
+Only the most relevant expert is selected for a given subquery, the route is
+recorded, and `max_concurrency` limits how many instances of that expert may run
+at once. Excess work waits for that specialist while unrelated experts retain
+their own capacity. That protects expensive inference resources without forcing
+the whole organization of agents into a single global queue.
+
+Out of the box, an expert is differentiated by its cluster-derived role context:
+what it knows, what it is responsible for, and which model identity it requests.
+The same registry can also point those identities at LoRA adapters, allowing
+specialists to gain weight-level behavior without storing a full foundation model
+for every role. Role documents make specialization immediate and inspectable;
+LoRA adapters provide a path to deeper learned specialization when training data
+is available.
+
+### The inference layer turns policy into capacity
+
+`apps/inference` is the operations layer beneath those specialists. It translates
+configuration into an explicit serving plan: CPU or CUDA, direct vLLM or an
+Ollama-compatible route, local execution or an offloaded endpoint. Its device,
+configuration, planning, tokenization, proxy, and benchmarking components keep
+hardware policy out of the agent's reasoning. The agent asks for a model identity;
+the inference layer decides how that request can be served.
+
+`apps/model-server` owns the longer-lived model lifecycle. Its CPU and CUDA
+services can receive, inspect, activate, and remove expert packages through a
+small administrative API. The package store is intentionally adapter-only. Each
+server keeps LoRA packages under `/models/<package>/adapters/<adapter>/`, while
+the shared base model is named in the package manifest and resolved through the
+separate runtime cache. Dullahan therefore does not duplicate billions of base
+weights every time a new expert is created. Many specialist adapters can share a
+compatible base model; a different base-model family requires its own serving
+capacity.
+
+This boundary also explains the two levels of concurrency in the project. EDL
+controls how much work may be assigned to an expert, while the inference server
+controls how that admitted work uses the underlying hardware. Separating those
+concerns lets Dullahan scale specialist demand without pretending that compute is
+unlimited.
+
+### The answer becomes part of the project's history
+
+As specialist responses return, the agent runtime's aggregation layer assembles
+them into the final result. Citations, routing decisions, model metadata, and the
+shape of the recursive execution can be persisted alongside the answer. The
+execution artifact store is therefore more than logging: it is the project's
+institutional record of what was asked, which evidence was used, which expert was
+trusted, and what the system concluded.
+
+That record supports review today and improvement tomorrow. A team can inspect a
+weak route, rebuild memory after its sources change, replay a task against a new
+model, or use successful traces as material for future evaluation and
+distillation. Dullahan's memory is cyclical: source knowledge informs the graph,
+the graph informs the experts, experts produce artifacts, and those artifacts help
+the organization improve the next run.
+
+### The connective tissue keeps the system replaceable
+
+The remaining modules make that journey usable outside a demo. `apps/mcp-servers`
+exposes CAL and EDL as small MCP tools so other agents and applications can request
+context or expert work without adopting the whole runtime. `packages/shared`
+provides the common contracts, identifiers, embedding and tokenization clients,
+and retrieval helpers that let independently deployed services agree on what a
+subquery, context bundle, route, and response mean. `configs/` captures the policy
+choices—recursion, retrieval, routing, inference, and capacity—that operators
+should be able to change without rewriting code.
+
+Together, these boundaries make Dullahan a platform for experimentation rather
+than a bet on one frozen stack. A team can replace the vector backend, improve the
+router, introduce a new model server, expose the capabilities through MCP, or
+change how memory is partitioned while keeping the rest of the story intact:
+understand the organization's knowledge, give each task the right field of view,
+assign accountable expertise, and preserve what happened.
+
 ## Ideal Use Cases
 
 Dullahan is a good fit when you want many small, specialized agents to work over
@@ -583,192 +811,7 @@ a structured body of knowledge:
 Dullahan is less ideal for one-shot chat, simple RAG over a small folder, or
 tasks where a single general-purpose model call is already sufficient.
 
-## Quickstart
-
-### 1. Install
-
-From the repository root:
-
-```bash
-python -m pip install -e ".[dev]"
-```
-
-This installs the CLI entrypoints:
-
-```bash
-dullahan-agent
-dullahan-cal
-dullahan-edl
-dullahan-inference
-dullahan-benchmark-gguf
-dullahan-mcp-cal
-dullahan-mcp-edl
-dullahan-graphify
-```
-
-The `graphify` command used by `dullahan-graphify` is provided by the
-`graphifyy` package from `safishamsi/graphify`.
-
-### 2. Graphify A Data Collection
-
-Point the CLI at a file or directory collection to construct graph memory from
-that world state:
-
-```bash
-dullahan-graphify ./research/market-notes --k 8
-```
-
-`dullahan-graphify` invokes the real
-[`safishamsi/graphify`](https://github.com/safishamsi/graphify) CLI, imports its
-`graphify-out/graph.json`, converts that graph into Dullahan's YAML graph
-memory, partitions it into K-sized clusters, and regenerates the expert registry
-from those clusters.
-
-The generated memory lands in:
-
-```text
-memory/graph/graph.yaml
-memory/graph/clusters.yaml
-memory/graph/experts.yaml
-memory/documents/nodes/
-memory/documents/clusters/
-memory/world_state/indexes/local.json
-```
-
-You can also pull source context from PostgreSQL before graphification. The SQL
-query should return `id`, `title`, `content`, and optionally `metadata` columns:
-
-```bash
-dullahan-graphify \
-  --postgres-dsn postgresql://dullahan:dullahan@127.0.0.1:5432/dullahan \
-  --postgres-query "select id, title, content, metadata from research_notes order by id" \
-  --k 8
-```
-
-That exports the pulled rows as Markdown under `memory/postgres_context/`, runs
-Graphify over that collection, converts the result into Dullahan graph memory,
-partitions the graph into K-bounded clusters, regenerates experts, and rebuilds
-WorldStateDB retrieval.
-
-Useful graphification options:
-
-```bash
-dullahan-graphify ./research/market-notes \
-  --k 6 \
-  --graphify-command graphify \
-  --graphify-output-dir ./graphify-out
-```
-
-If you already have a `graphify` output file, import it directly:
-
-```bash
-dullahan-graphify ./research/market-notes \
-  --from-graphify-json ./graphify-out/graph.json \
-  --k 6
-```
-
-### 3. Start Local Inference
-
-Inspect the automatically resolved device, quantization, model, offload, and
-launch command without loading model weights:
-
-```bash
-dullahan-inference plan
-```
-
-The default [`configs/inference.yaml`](configs/inference.yaml) selects CUDA when
-available and CPU otherwise. Automatic quantization selects GPTQ on CUDA and
-GGUF on CPU. Set `device` to `cpu` or `cuda`, and `quantization` to `gptq`,
-`gguf`, `awq`, or `none`, to override either decision. All default Qwen
-checkpoints are between 7B and 9B parameters.
-
-For direct Qwen hosting, install the appropriate vLLM build for the machine and
-start its OpenAI-compatible server:
-
-```bash
-# GGUF additionally requires: uv pip install vllm-gguf-plugin
-dullahan-inference serve
-```
-
-CPU and CUDA vLLM packages have different installation requirements; follow
-the [official CPU installation guide](https://docs.vllm.ai/en/stable/getting_started/installation/cpu/)
-or the matching CUDA installation guide. vLLM currently describes GGUF support
-as experimental and provides it through `vllm-gguf-plugin`.
-
-To use Ollama instead, set `provider: ollama` and choose the desired Qwen model
-tag under `ollama.model`. The proxy uses Ollama's non-streaming
-[`/api/generate`](https://docs.ollama.com/api/generate) API while exposing the
-OpenAI-compatible `/v1/completions` contract expected by Dullahan. Set
-`ollama.launch_server: true` if Dullahan should start `ollama serve` itself.
-
-EDL and the planner use the local OpenAI-compatible inference endpoint by default:
-
-```bash
-export EDL_MODEL_PROVIDER=http
-export EDL_MODEL_BASE_URL=http://127.0.0.1:30000/v1
-export AGENT_PLANNER_PROVIDER=http
-export AGENT_PLANNER_BASE_URL=http://127.0.0.1:30000/v1
-export AGENT_SYNTHESIS_PROVIDER=http
-export AGENT_SYNTHESIS_BASE_URL=http://127.0.0.1:30000/v1
-```
-
-Start `dullahan-inference serve` before running the agent. Planning, expert
-responses, and final answer synthesis fail visibly when the inference endpoint
-is unavailable; there is no template-response fallback.
-
-CUDA plans enable vLLM's `--cpu-offload-gb` and `--swap-space` controls. The
-[vLLM offload documentation](https://docs.vllm.ai/en/v0.20.0/examples/basic/offline_inference/#cpu-offload)
-notes that CPU offload effectively extends available GPU memory but benefits
-from a fast CPU–GPU interconnect.
-
-For persistent model storage and remote/container vLLM hosting, use the exact
-two-variant workflow in [`apps/model-server/README.md`](apps/model-server/README.md).
-It builds a Linux ARM64 CPU image for Apple Silicon hosts or an NVIDIA CUDA
-image for Linux GPU hosts, then runs the common model-manager wrapper. Set
-`model_server.enabled: true` in `configs/inference.yaml`; `device: cpu` selects
-port 8001 and `device: cuda` selects port 8002. Run
-`dullahan-inference activate` before sending requests to the selected `/v1`
-endpoint.
-
-The shared CPU/CUDA model manager stores adapter-only expert packages, provides
-authenticated package and adapter CRUD, and exports only `lora_only` archives.
-Packages retain the base-model reference and adapter names but never place base
-checkpoint weights in the `/models` CRUD volume; vLLM resolves the shared base
-from Hugging Face when activated. Configure the client with
-`model_server.export_mode: lora_only`; see
-`apps/model-server/README.md` for the package layout and endpoints.
-
-For interactive practical-capability and concurrency testing, open
-[`notebooks/dullahan_production_benchmark.ipynb`](notebooks/dullahan_production_benchmark.ipynb).
-Install its kernel dependencies with `uv sync --extra dev --extra notebook --inexact`.
-The notebook starts real CPU inference, accepts custom queries and prompts,
-exports raw evidence, and plots latency, throughput, semantic coverage, and memory deltas.
-
-### 4. Run A Local In-Process Execution
-
-The fastest path runs the agent runtime, CAL, and EDL in one process:
-
-```bash
-dullahan-agent "Assess whether a long volatility strategy is attractive before this week's major earnings releases" --max-depth 1
-```
-
-Useful options:
-
-```bash
-dullahan-agent "Build a multi-factor trade thesis for rotating from mega-cap tech into regional banks" \
-  --max-depth 2 \
-  --max-breadth 3 \
-  --max-total-instances 12 \
-  --persist-artifacts
-```
-
-For the full structured result:
-
-```bash
-dullahan-agent "Explain the key risks in a pairs trade between two semiconductor stocks" --max-depth 1 --json
-```
-
-### 5. Inspect Artifacts
+## Execution Artifacts
 
 When `--persist-artifacts` is set, Dullahan writes a run folder under
 `memory/executions/<trace_id>/`.

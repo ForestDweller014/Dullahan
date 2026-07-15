@@ -48,12 +48,25 @@ class ContextAugmentationService:
             model=config.embedding_model,
             dimensions=config.embedding_dimensions,
             timeout_seconds=config.inference_timeout_seconds,
+            api_key=(
+                config.inference_api_key.get_secret_value()
+                if config.inference_api_key
+                else None
+            ),
+            request_dimensions=config.inference_provider == "openai",
         )
-        token_counter = token_counter or InferenceTokenCounter(
-            base_url=config.inference_base_url,
-            model=config.tokenizer_model,
-            timeout_seconds=config.inference_timeout_seconds,
-        )
+        if token_counter is None:
+            tokenizer_api_key = (
+                config.tokenizer_api_key.get_secret_value()
+                if config.tokenizer_api_key
+                else None
+            )
+            token_counter = InferenceTokenCounter(
+                base_url=config.tokenizer_base_url,
+                model=config.tokenizer_model,
+                api_key=tokenizer_api_key,
+                timeout_seconds=config.inference_timeout_seconds,
+            )
         if config.world_state_backend == "postgres":
             if not config.postgres_dsn:
                 raise ValueError(

@@ -80,6 +80,34 @@ def test_embedding_model_rejects_unexpected_dimensions(monkeypatch) -> None:
         model.embed("text")
 
 
+def test_hosted_embedding_adds_authentication_and_dimensions(monkeypatch) -> None:
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["payload"] = json.loads(request.data)
+        captured["authorization"] = request.get_header("Authorization")
+        return FakeResponse({"data": [{"index": 0, "embedding": [1.0, 0.0]}]})
+
+    monkeypatch.setattr(embedding_module, "urlopen", fake_urlopen)
+    model = OpenAICompatibleEmbeddingModel(
+        base_url="https://api.openai.com/v1",
+        model="text-embedding-3-small",
+        dimensions=2,
+        api_key="test-key",
+        request_dimensions=True,
+    )
+
+    assert model.embed("hosted") == [1.0, 0.0]
+    assert captured == {
+        "payload": {
+            "model": "text-embedding-3-small",
+            "input": ["hosted"],
+            "dimensions": 2,
+        },
+        "authorization": "Bearer test-key",
+    }
+
+
 # Verifies cosine similarity normalization without mocking inference functionality.
 def test_cosine_similarity_normalizes_vectors_and_rejects_mismatched_dimensions() -> None:
     assert cosine_similarity([2.0, 0.0], [1.0, 0.0]) == 1.0

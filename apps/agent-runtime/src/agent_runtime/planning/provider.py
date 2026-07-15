@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from urllib.error import HTTPError, URLError
-from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 
+from dullahan_shared.inference import InferenceHttpError, OpenAICompatibleTextClient
 from dullahan_shared.schemas.query import QueryEnvelope
 
 
@@ -33,39 +31,29 @@ class OpenAICompatiblePlannerProvider(PlannerProvider):
         base_url: str,
         model: str,
         timeout_seconds: float = 30.0,
+        api_mode: str = "completions",
+        api_key: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.api_mode = api_mode
+        self.api_key = api_key
 
     def plan(self, request: PlannerRequest) -> PlannerResult:
         prompt = self._build_prompt(request)
-        http_request = UrlRequest(
-            url=f"{self.base_url}/completions",
-            data=json.dumps(
-                {
-                    "model": self.model,
-                    "prompt": prompt,
-                    "max_tokens": 512,
-                    "temperature": 0,
-                }
-            ).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            method="POST",
-        )
         try:
-            with urlopen(http_request, timeout=self.timeout_seconds) as response:
-                response_body = response.read().decode("utf-8")
-        except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"planner provider failed with HTTP {exc.code}: {detail}") from exc
-        except URLError as exc:
-            raise RuntimeError(f"planner provider request failed: {exc.reason}") from exc
-
-        data = json.loads(response_body)
-        text = self._extract_text(data)
+            result = OpenAICompatibleTextClient(
+                base_url=self.base_url,
+                api_mode=self.api_mode,
+                api_key=self.api_key,
+                timeout_seconds=self.timeout_seconds,
+                opener=urlopen,
+            ).generate(model=self.model, prompt=prompt, max_tokens=512)
+        except InferenceHttpError as exc:
+            raise RuntimeError(f"planner provider failed: {exc}") from exc
         return PlannerResult(
-            subqueries=self._parse_subqueries(text, max_breadth=request.max_breadth),
+            subqueries=self._parse_subqueries(result.text, max_breadth=request.max_breadth),
             provider="openai-compatible-planner",
         )
 
@@ -81,18 +69,6 @@ class OpenAICompatiblePlannerProvider(PlannerProvider):
                 request.parent_query.query,
             ]
         )
-
-    def _extract_text(self, data: dict) -> str:
-        choices = data.get("choices") or []
-        if not choices:
-            return ""
-        first_choice = choices[0]
-        if "text" in first_choice:
-            return str(first_choice["text"])
-        message = first_choice.get("message")
-        if isinstance(message, dict):
-            return str(message.get("content", ""))
-        return ""
 
     def _parse_subqueries(self, text: str, *, max_breadth: int) -> list[str]:
         subqueries = []

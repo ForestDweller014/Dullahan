@@ -15,10 +15,12 @@ class ExpertRunner:
         prompt_builder: ExpertPromptBuilder,
         model_provider: ModelProvider,
         max_tokens: int = 512,
+        model_override: str | None = None,
     ) -> None:
         self.prompt_builder = prompt_builder
         self.model_provider = model_provider
         self.max_tokens = max_tokens
+        self.model_override = model_override
 
     def run(
         self,
@@ -28,9 +30,10 @@ class ExpertRunner:
     ) -> ExpertResponse:
         cited_document_ids = [document.id for document in request.context.documents[:5]]
         prompt = self.prompt_builder.build(request, expert)
+        selected_model = self.model_override or expert.model
         model_result = self.model_provider.complete(
             ModelRequest(
-                model=expert.model,
+                model=selected_model,
                 prompt=prompt,
                 max_tokens=self.max_tokens,
             )
@@ -49,7 +52,8 @@ class ExpertRunner:
                 "route_probability": route.probability,
                 "candidate_count": len(route.distribution),
                 "attention_scoring": "embedding_cosine",
-                "model": expert.model,
+                "model": selected_model,
+                "expert_model": expert.model,
                 "model_provider": model_result.provider,
                 "model_token_count": model_result.token_count,
             },

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from urllib.error import HTTPError, URLError
-from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
+
+from dullahan_shared.inference import InferenceHttpError, OpenAICompatibleTextClient
 
 
 @dataclass(frozen=True)
@@ -31,61 +30,44 @@ class ModelProviderError(RuntimeError):
 
 
 class OpenAICompatibleHttpProvider(ModelProvider):
-    """HTTP provider for OpenAI-compatible completion APIs, including SGLang."""
+    """HTTP provider for Dullahan completions or hosted OpenAI Responses."""
 
-    def __init__(self, *, base_url: str, timeout_seconds: float = 30.0) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        timeout_seconds: float = 30.0,
+        api_mode: str = "completions",
+        api_key: str | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.api_mode = api_mode
+        self.api_key = api_key
 
     def complete(self, request: ModelRequest) -> ModelResult:
-        payload = {
-            "model": request.model,
-            "prompt": request.prompt,
-            "max_tokens": request.max_tokens,
-        }
-        http_request = UrlRequest(
-            url=f"{self.base_url}/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            method="POST",
-        )
-
         try:
-            with urlopen(http_request, timeout=self.timeout_seconds) as response:
-                response_body = response.read().decode("utf-8")
-        except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise ModelProviderError(
-                f"model provider failed with HTTP {exc.code}: {detail}"
-            ) from exc
-        except URLError as exc:
-            raise ModelProviderError(f"model provider request failed: {exc.reason}") from exc
-
-        data = json.loads(response_body)
-        text = self._extract_text(data)
-        usage = data.get("usage", {})
-        token_count = usage.get("completion_tokens")
-        if not isinstance(token_count, int) or token_count < 0:
+            result = OpenAICompatibleTextClient(
+                base_url=self.base_url,
+                api_mode=self.api_mode,
+                api_key=self.api_key,
+                timeout_seconds=self.timeout_seconds,
+                opener=urlopen,
+            ).generate(
+                model=request.model,
+                prompt=request.prompt,
+                max_tokens=request.max_tokens,
+            )
+        except InferenceHttpError as exc:
+            raise ModelProviderError(f"model provider failed: {exc}") from exc
+        if not result.text:
+            raise ModelProviderError("model provider response contained no text")
+        if result.output_tokens is None or result.output_tokens < 0:
             raise ModelProviderError(
                 "model provider response contained no native completion token usage"
             )
         return ModelResult(
-            text=text,
+            text=result.text,
             provider="openai-compatible-http",
-            token_count=int(token_count),
+            token_count=result.output_tokens,
         )
-
-    def _extract_text(self, data: dict) -> str:
-        choices = data.get("choices") or []
-        if not choices:
-            raise ModelProviderError("model provider response contained no choices")
-
-        first_choice = choices[0]
-        if "text" in first_choice:
-            return str(first_choice["text"]).strip()
-
-        message = first_choice.get("message")
-        if isinstance(message, dict) and "content" in message:
-            return str(message["content"]).strip()
-
-        raise ModelProviderError("model provider response contained no text")

@@ -30,6 +30,8 @@ class OpenAICompatibleEmbeddingModel:
         model: str,
         dimensions: int,
         timeout_seconds: float = 120.0,
+        api_key: str | None = None,
+        request_dimensions: bool = False,
     ) -> None:
         if dimensions <= 0:
             raise ValueError("embedding dimensions must be positive")
@@ -37,6 +39,8 @@ class OpenAICompatibleEmbeddingModel:
         self.model_id = model
         self.dimensions = dimensions
         self.timeout_seconds = timeout_seconds
+        self.api_key = api_key
+        self.request_dimensions = request_dimensions
 
     def embed(self, text: str) -> list[float]:
         return self.embed_many([text])[0]
@@ -44,10 +48,16 @@ class OpenAICompatibleEmbeddingModel:
     def embed_many(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
+        payload: dict[str, object] = {"model": self.model_id, "input": texts}
+        if self.request_dimensions:
+            payload["dimensions"] = self.dimensions
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         request = Request(
             f"{self.base_url}/embeddings",
-            data=json.dumps({"model": self.model_id, "input": texts}).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
             method="POST",
         )
         try:

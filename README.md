@@ -20,10 +20,10 @@ Teams can connect Dullahan to an external OpenAI API-compatible service, or use
 the optional **Dullahan Inference** module as the local-hosting alternative. The
 local module keeps models and data on operator-controlled hardware while
 presenting the same OpenAI-compatible model boundary to the agent, CAL, and EDL.
-Direct use of the hosted OpenAI API currently requires a small gateway or client
-extension for bearer authentication and Dullahan's native tokenization endpoint;
-the bundled local path provides the project's complete inference contract out of
-the box.
+Direct use of `api.openai.com` is supported: Dullahan adapts generation to the
+Responses API, sends bearer-token authentication, and uses the Embeddings API.
+CAL's context accounting deliberately remains on Dullahan's custom `/tokenize`
+endpoint; Dullahan never sends that custom request to OpenAI.
 
 ## Quickstart: From Source Material To An Answer
 
@@ -31,9 +31,10 @@ The sequence below starts at the repository root and ends with a persisted answe
 Commands that keep running should be opened in separate terminals. The default
 route demonstrates the optional local-hosting choice: Ollama runs behind
 Dullahan's inference proxy, where one endpoint serves the three capabilities the
-system needs—generation, semantic embeddings, and native tokenization. If those
-capabilities come from an external OpenAI-compatible service and gateway instead,
-the Dullahan Inference process does not need to run.
+system needs—generation, semantic embeddings, and native tokenization. In hosted
+mode, OpenAI supplies generation and embeddings while CAL still needs a
+Dullahan-compatible custom tokenizer service. The bundled inference process can
+provide only that route without becoming the generation host.
 
 ### 1. Install Dullahan
 
@@ -144,6 +145,38 @@ GGUF for CPU unless the configuration overrides it. Direct vLLM is the
 generation route; a complete deployment must still provide the configured
 embedding and tokenization capabilities, which is why the combined Ollama proxy
 is the recommended first run.
+
+### 4B. Use The Hosted OpenAI Alternative
+
+To use OpenAI instead of starting Dullahan Inference, export one provider choice,
+one credential, and the hosted generation model:
+
+```bash
+export DULLAHAN_INFERENCE_PROVIDER=openai
+export OPENAI_API_KEY=your-api-key
+export OPENAI_MODEL=gpt-5-mini
+export DULLAHAN_EMBEDDING_MODEL=text-embedding-3-small
+export DULLAHAN_EMBEDDING_DIMENSIONS=1024
+export DULLAHAN_TOKENIZER_BASE_URL=http://127.0.0.1:30000/v1
+export DULLAHAN_TOKENIZER_MODEL=Qwen/Qwen3-8B
+```
+
+These shared settings configure the planner, expert execution, final synthesis,
+CAL embeddings, and EDL routing embeddings. Dullahan sends generation to
+`/v1/responses` and embeddings to `/v1/embeddings`. CAL independently sends token
+accounting to Dullahan's custom `/tokenize` route at
+`DULLAHAN_TOKENIZER_BASE_URL`; it never sends that route to OpenAI. Start
+`dullahan-inference serve --config configs/inference.yaml` to provide the bundled
+custom tokenizer service, or point the variable at another Dullahan-compatible
+tokenizer gateway. Only the tokenizer artifact is loaded when that route is
+used; OpenAI still handles generation and embeddings. Because the expert
+registry contains local LoRA model aliases, hosted mode replaces those aliases
+at execution time with `OPENAI_MODEL` while preserving each expert's role,
+prompt, routing decision, and evidence boundary.
+
+Use `OPENAI_BASE_URL` to point at a compatible gateway that implements these
+same endpoints. Individual `AGENT_*`, `EDL_*`, and `DULLAHAN_*` settings can
+still override the shared values for split deployments.
 
 ### 5. Solve A Prompt
 
@@ -401,7 +434,9 @@ operator's declarative policy into a concrete, inspectable
 then follows one of three paths: a direct vLLM process, an OpenAI-compatible
 Ollama proxy, or one of the persistent Docker model servers. The default Ollama
 path exposes generation, embeddings, and native tokenization through one
-Dullahan endpoint.
+Dullahan endpoint. In a hosted OpenAI deployment, its custom `/tokenize` route
+can instead remain as a narrow CAL accounting sidecar while generation and
+embeddings bypass it.
 
 ```mermaid
 flowchart TB
@@ -581,7 +616,7 @@ flowchart TB
     Aggregator -->|"final response"| User
     Planner -->|"planning completion"| Inference
     Aggregator -->|"synthesis completion"| Inference
-    Cal -->|"Embeddings and native tokenization"| Inference
+    Cal -->|"Embeddings and exact token counts"| Inference
     Router -->|"expert-role embeddings"| Inference
     ExpertRunner -->|"expert completion"| Inference
     Runtime --> TraceStore
@@ -868,8 +903,10 @@ This is the filesystem memory surface: you can inspect what each agent asked,
 what context CAL supplied, which expert EDL selected, and what the expert
 returned. Each persisted `ContextBundle` also includes context optimization
 metadata such as candidate token count, selected token count, tokenizer model,
-and context reduction percentage for that subquery. Counts come from the
-generation model's native tokenizer usage rather than word/character estimates.
+and context reduction percentage for that subquery. Every deployment counts
+through Dullahan's configured custom `/tokenize` endpoint; hosted OpenAI mode
+does not redirect accounting to an OpenAI endpoint. Dullahan does not substitute
+word or character estimates.
 
 ### Exported Action / Inference Graph
 
@@ -1079,30 +1116,41 @@ Common environment variables:
 | `WORLD_STATE_BACKEND` | `local` or `postgres` retrieval backend for CAL. | `local` |
 | `WORLD_STATE_POSTGRES_DSN` | PostgreSQL DSN used when `WORLD_STATE_BACKEND=postgres`. | unset |
 | `WORLD_STATE_POSTGRES_TABLE` | pgvector table used for WorldStateDB documents. | `world_state_documents` |
-| `DULLAHAN_INFERENCE_BASE_URL` | Shared completion, embedding, and tokenizer endpoint. | `http://127.0.0.1:30000/v1` |
-| `DULLAHAN_EMBEDDING_MODEL` | Semantic model used consistently by WorldStateDB and EDL. | `qwen3-embedding:0.6b` |
+| `DULLAHAN_INFERENCE_PROVIDER` | Shared inference contract: `http` for local compatible endpoints or `openai` for the hosted Responses API. | `http` |
+| `DULLAHAN_INFERENCE_BASE_URL` | Optional shared inference URL override. In OpenAI mode, `OPENAI_BASE_URL` is used when this is unset. | `http://127.0.0.1:30000/v1` locally |
+| `DULLAHAN_INFERENCE_API_KEY` | Optional shared bearer token; falls back to `OPENAI_API_KEY` in OpenAI mode. | unset |
+| `OPENAI_API_KEY` | Bearer credential required when the shared provider is `openai`. | unset |
+| `OPENAI_BASE_URL` | Hosted Responses and Embeddings API base URL. | `https://api.openai.com/v1` |
+| `OPENAI_MODEL` | Hosted generation model shared by planning, experts, and synthesis. | `gpt-5-mini` |
+| `DULLAHAN_EMBEDDING_MODEL` | Semantic model used consistently by WorldStateDB and EDL. | `qwen3-embedding:0.6b` locally; `text-embedding-3-small` on OpenAI |
 | `DULLAHAN_EMBEDDING_DIMENSIONS` | Vector size expected from the semantic model and pgvector. | `1024` |
-| `DULLAHAN_TOKENIZER_MODEL` | Exact generation tokenizer used by CAL token accounting. | `Qwen/Qwen3-8B` |
+| `DULLAHAN_TOKENIZER_BASE_URL` | Independent Dullahan-compatible custom `/tokenize` service used by CAL in both provider modes. | selected local inference URL; `http://127.0.0.1:30000/v1` in OpenAI mode |
+| `DULLAHAN_TOKENIZER_API_KEY` | Optional bearer token for the custom tokenizer service. | shared key in local `http` mode; unset in OpenAI mode |
+| `DULLAHAN_TOKENIZER_MODEL` | Native tokenizer model used by CAL context accounting. | `Qwen/Qwen3-8B` |
 | `DULLAHAN_INFERENCE_TIMEOUT_SECONDS` | Timeout for embedding and tokenizer inference calls. | `120` |
-| `EDL_MODEL_PROVIDER` | Expert model provider. Only `http` is supported. | `http` |
+| `EDL_MODEL_PROVIDER` | Optional expert provider override: `http` or `openai`. | shared provider |
 | `EDL_MODEL_BASE_URL` | OpenAI-compatible model endpoint for expert execution. | `http://127.0.0.1:30000/v1` |
+| `EDL_MODEL_API_KEY` | Optional expert endpoint bearer-token override. | shared API key |
+| `EDL_MODEL` | Optional generation-model override for all hosted expert calls. | `OPENAI_MODEL` in OpenAI mode; expert alias locally |
 | `EDL_MODEL_TIMEOUT_SECONDS` | Timeout for expert model calls. | `30` |
 | `EDL_MODEL_MAX_TOKENS` | Maximum completion tokens for an expert response. | `512` |
 | `EDL_MAX_DISPATCH_CONCURRENCY` | Max concurrent EDL dispatch workers. | `16` |
-| `AGENT_PLANNER_PROVIDER` | Planner provider. Only `http` is supported. | `http` |
+| `AGENT_PLANNER_PROVIDER` | Optional planner provider override: `http` or `openai`. | shared provider |
 | `AGENT_PLANNER_BASE_URL` | OpenAI-compatible planner endpoint. | `http://127.0.0.1:30000/v1` |
+| `AGENT_PLANNER_API_KEY` | Optional planner bearer-token override. | shared API key |
 | `AGENT_PLANNER_MODEL` | Planner model name. | `local-planner` |
-| `AGENT_SYNTHESIS_PROVIDER` | Final-answer provider. Only `http` is supported. | `http` |
+| `AGENT_SYNTHESIS_PROVIDER` | Optional final-answer provider override: `http` or `openai`. | shared provider |
 | `AGENT_SYNTHESIS_BASE_URL` | OpenAI-compatible final synthesis endpoint. | `http://127.0.0.1:30000/v1` |
+| `AGENT_SYNTHESIS_API_KEY` | Optional final-synthesis bearer-token override. | shared API key |
 | `AGENT_SYNTHESIS_MODEL` | Model used to synthesize paired subquery answers. | `local-planner` |
 | `AGENT_SYNTHESIS_TIMEOUT_SECONDS` | Timeout for final answer synthesis. | `60` |
 | `AGENT_SYNTHESIS_MAX_TOKENS` | Maximum completion tokens in the final answer. | `1024` |
 | `DULLAHAN_INFERENCE_CONFIG` | YAML file used by `dullahan-inference`. | `configs/inference.yaml` |
 
-The planner, CAL, EDL, and final synthesizer require a real inference endpoint.
-The default `dullahan-inference` Ollama proxy provides completion,
-`/v1/embeddings`, and `/tokenize` endpoints from models placed by the same
-CPU/GPU policy. Pull both default models before the first run:
+The planner, CAL, EDL, and final synthesizer require real inference endpoints.
+In local mode, the default `dullahan-inference` Ollama proxy provides completion,
+`/v1/embeddings`, and Dullahan's custom `/tokenize` endpoint from models placed
+by the same CPU/GPU policy. Pull both default models before the first run:
 
 ```bash
 ollama pull qwen3:8b

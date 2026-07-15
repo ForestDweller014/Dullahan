@@ -20,7 +20,15 @@ services:
       CAL_PORT: "8100"
       WORLD_STATE_BACKEND: local
       WORLD_STATE_POSTGRES_DSN: postgresql://dullahan:dullahan@postgres:5432/dullahan
-      DULLAHAN_INFERENCE_BASE_URL: http://host.docker.internal:30000/v1
+      DULLAHAN_INFERENCE_PROVIDER: ${DULLAHAN_INFERENCE_PROVIDER:-http}
+      DULLAHAN_INFERENCE_BASE_URL: ${DULLAHAN_INFERENCE_BASE_URL:-}
+      DULLAHAN_LOCAL_INFERENCE_BASE_URL: http://host.docker.internal:30000/v1
+      DULLAHAN_INFERENCE_API_KEY: ${DULLAHAN_INFERENCE_API_KEY:-}
+      DULLAHAN_TOKENIZER_BASE_URL: ${DULLAHAN_TOKENIZER_BASE_URL:-}
+      DULLAHAN_TOKENIZER_API_KEY: ${DULLAHAN_TOKENIZER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-mini}
     ports:
       - "8100:8100"
     volumes:
@@ -37,8 +45,13 @@ services:
       DULLAHAN_REPO_ROOT: /app
       EDL_HOST: 0.0.0.0
       EDL_PORT: "8200"
-      EDL_MODEL_PROVIDER: http
-      EDL_MODEL_BASE_URL: http://host.docker.internal:30000/v1
+      DULLAHAN_INFERENCE_PROVIDER: ${DULLAHAN_INFERENCE_PROVIDER:-http}
+      DULLAHAN_INFERENCE_BASE_URL: ${DULLAHAN_INFERENCE_BASE_URL:-}
+      DULLAHAN_LOCAL_INFERENCE_BASE_URL: http://host.docker.internal:30000/v1
+      DULLAHAN_INFERENCE_API_KEY: ${DULLAHAN_INFERENCE_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-mini}
     ports:
       - "8200:8200"
     volumes:
@@ -63,10 +76,13 @@ services:
       - "1"
     environment:
       DULLAHAN_REPO_ROOT: /app
-      AGENT_PLANNER_PROVIDER: http
-      AGENT_PLANNER_BASE_URL: http://host.docker.internal:30000/v1
-      AGENT_SYNTHESIS_PROVIDER: http
-      AGENT_SYNTHESIS_BASE_URL: http://host.docker.internal:30000/v1
+      DULLAHAN_INFERENCE_PROVIDER: ${DULLAHAN_INFERENCE_PROVIDER:-http}
+      DULLAHAN_INFERENCE_BASE_URL: ${DULLAHAN_INFERENCE_BASE_URL:-}
+      DULLAHAN_LOCAL_INFERENCE_BASE_URL: http://host.docker.internal:30000/v1
+      DULLAHAN_INFERENCE_API_KEY: ${DULLAHAN_INFERENCE_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-mini}
     depends_on:
       - cal
       - edl

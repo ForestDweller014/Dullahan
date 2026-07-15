@@ -6,6 +6,7 @@ from cal.config import CalConfig
 from cal.service import ContextAugmentationService
 from dullahan_shared.embeddings import EmbeddingModel
 from dullahan_shared.ids import new_id
+from dullahan_shared.inference import provider_api_mode
 from dullahan_shared.schemas.context import ContextBundle
 from dullahan_shared.schemas.execution import ExecutionStatus
 from dullahan_shared.schemas.expert import ExpertResponse
@@ -119,6 +120,10 @@ class AgentRuntime:
             base_url=config.planner_base_url,
             model=config.planner_model,
             timeout_seconds=config.planner_timeout_seconds,
+            api_mode=provider_api_mode(config.planner_provider),
+            api_key=(
+                config.planner_api_key.get_secret_value() if config.planner_api_key else None
+            ),
         )
 
     @staticmethod
@@ -127,6 +132,12 @@ class AgentRuntime:
             base_url=config.synthesis_base_url,
             model=config.synthesis_model,
             timeout_seconds=config.synthesis_timeout_seconds,
+            api_mode=provider_api_mode(config.synthesis_provider),
+            api_key=(
+                config.synthesis_api_key.get_secret_value()
+                if config.synthesis_api_key
+                else None
+            ),
         )
 
     def run(self, request: AgentRunRequest) -> AgentRunResult:

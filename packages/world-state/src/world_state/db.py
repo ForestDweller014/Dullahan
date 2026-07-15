@@ -84,11 +84,21 @@ class LocalWorldStateDB:
 def _default_embedding_model() -> OpenAICompatibleEmbeddingModel:
     import os
 
+    from dullahan_shared.inference_config import (
+        embedding_model,
+        inference_api_key,
+        inference_base_url,
+        inference_provider,
+    )
+
+    provider = inference_provider()
     return OpenAICompatibleEmbeddingModel(
-        base_url=os.getenv("DULLAHAN_INFERENCE_BASE_URL", "http://127.0.0.1:30000/v1"),
-        model=os.getenv("DULLAHAN_EMBEDDING_MODEL", "qwen3-embedding:0.6b"),
+        base_url=inference_base_url(provider),
+        model=embedding_model(provider),
         dimensions=int(os.getenv("DULLAHAN_EMBEDDING_DIMENSIONS", "1024")),
         timeout_seconds=float(os.getenv("DULLAHAN_INFERENCE_TIMEOUT_SECONDS", "120")),
+        api_key=inference_api_key(provider),
+        request_dimensions=provider == "openai",
     )
 
 

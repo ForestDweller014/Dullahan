@@ -26,11 +26,13 @@ class InferenceTokenCounter:
         base_url: str,
         model: str,
         timeout_seconds: float = 120.0,
+        api_key: str | None = None,
     ) -> None:
         normalized = base_url.rstrip("/")
         self.endpoint = f"{normalized.removesuffix('/v1')}/tokenize"
         self.model_id = model
         self.timeout_seconds = timeout_seconds
+        self.api_key = api_key
         self._cache: dict[str, int] = {}
         self._cache_lock = Lock()
 
@@ -39,10 +41,13 @@ class InferenceTokenCounter:
             cached = self._cache.get(text)
         if cached is not None:
             return cached
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         request = Request(
             self.endpoint,
             data=json.dumps({"model": self.model_id, "prompt": text}).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            headers=headers,
             method="POST",
         )
         try:

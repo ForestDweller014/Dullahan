@@ -154,3 +154,37 @@ def test_synthesis_provider_requires_native_token_usage(monkeypatch) -> None:
         match="no native prompt token usage",
     ):
         aggregator.synthesize(root_query, responses)
+
+
+def test_openai_synthesis_maps_responses_usage(monkeypatch) -> None:
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["authorization"] = request.get_header("Authorization")
+        return FakeHttpResponse(
+            {
+                "output": [
+                    {
+                        "content": [
+                            {"type": "output_text", "text": "Hosted final answer."}
+                        ]
+                    }
+                ],
+                "usage": {"input_tokens": 20, "output_tokens": 4},
+            }
+        )
+
+    monkeypatch.setattr(aggregation_module, "urlopen", fake_urlopen)
+    result = OpenAICompatibleSynthesisProvider(
+        base_url="https://api.openai.com/v1",
+        model="gpt-5-mini",
+        api_mode="responses",
+        api_key="test-key",
+    ).synthesize(aggregation_module.SynthesisRequest(prompt="Evidence", max_tokens=100))
+
+    assert result.text == "Hosted final answer."
+    assert result.prompt_tokens == 20
+    assert result.completion_tokens == 4
+    assert captured["url"] == "https://api.openai.com/v1/responses"
+    assert captured["authorization"] == "Bearer test-key"

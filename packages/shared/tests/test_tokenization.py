@@ -61,3 +61,21 @@ def test_inference_token_counter_rejects_missing_native_count(monkeypatch) -> No
 
     with pytest.raises(TokenizationError, match="valid count"):
         counter.count("text")
+
+
+def test_inference_token_counter_supports_gateway_bearer_auth(monkeypatch) -> None:
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["authorization"] = request.get_header("Authorization")
+        return FakeResponse({"count": 2})
+
+    monkeypatch.setattr(tokenization_module, "urlopen", fake_urlopen)
+    counter = InferenceTokenCounter(
+        base_url="https://tokenizer.example/v1",
+        model="generation-model",
+        api_key="gateway-key",
+    )
+
+    assert counter.count("two tokens") == 2
+    assert captured["authorization"] == "Bearer gateway-key"

@@ -78,6 +78,32 @@ def test_expert_runner_builds_prompt_and_records_model_metadata() -> None:
     assert response.response == "Grounded test response for local-slm-test"
 
 
+def test_expert_runner_overrides_local_expert_alias_for_hosted_model() -> None:
+    expert = ExpertProfile(
+        id="expert:test",
+        cluster_id="cluster:test",
+        role_context="You are a specialist.",
+        model="local-slm-test",
+    )
+    route = ExpertRoute(expert=expert, score=1.0, probability=1.0, distribution=[])
+    request = DispatchRequest(
+        sender_id="query:root",
+        query_id="query:child",
+        subquery="Answer this",
+        context=ContextBundle(query_id="query:child"),
+    )
+
+    response = ExpertRunner(
+        prompt_builder=ExpertPromptBuilder(),
+        model_provider=StubModelProvider(),
+        model_override="gpt-5-mini",
+    ).run(request, expert, route)
+
+    assert response.response == "Grounded test response for gpt-5-mini"
+    assert response.routing_metadata["model"] == "gpt-5-mini"
+    assert response.routing_metadata["expert_model"] == "local-slm-test"
+
+
 class FakeHttpResponse:
     def __init__(self, payload: dict) -> None:
         self.payload = payload
@@ -166,5 +192,5 @@ def test_edl_config_selects_http_model_provider() -> None:
 
 # Verifies that EDL config rejects unknown model provider.
 def test_edl_config_rejects_unknown_model_provider() -> None:
-    with pytest.raises(ValueError, match="Input should be 'http'"):
+    with pytest.raises(ValueError, match="Input should be 'http' or 'openai'"):
         EdlConfig(model_provider="bogus")

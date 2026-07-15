@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from threading import Condition
 
 from dullahan_shared.embeddings import EmbeddingModel, OpenAICompatibleEmbeddingModel
+from dullahan_shared.inference import provider_api_mode
 from dullahan_shared.schemas.expert import ExpertProfile, ExpertResponse
 
 from edl.api.schemas import (
@@ -85,6 +86,12 @@ class ExpertDispatchService:
                     model=config.embedding_model,
                     dimensions=config.embedding_dimensions,
                     timeout_seconds=config.model_timeout_seconds,
+                    api_key=(
+                        config.model_api_key.get_secret_value()
+                        if config.model_api_key
+                        else None
+                    ),
+                    request_dimensions=config.model_provider == "openai",
                 ),
                 min_score_threshold=config.min_score_threshold,
             ),
@@ -92,6 +99,7 @@ class ExpertDispatchService:
                 prompt_builder=ExpertPromptBuilder(),
                 model_provider=model_provider or cls._build_model_provider(config),
                 max_tokens=config.model_max_tokens,
+                model_override=config.model_override,
             ),
             max_dispatch_concurrency=config.max_dispatch_concurrency,
         )
@@ -101,6 +109,10 @@ class ExpertDispatchService:
         return OpenAICompatibleHttpProvider(
             base_url=config.model_base_url,
             timeout_seconds=config.model_timeout_seconds,
+            api_mode=provider_api_mode(config.model_provider),
+            api_key=(
+                config.model_api_key.get_secret_value() if config.model_api_key else None
+            ),
         )
 
     def dispatch(self, request: DispatchRequest) -> DispatchResponse:

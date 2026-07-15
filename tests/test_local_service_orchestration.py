@@ -18,9 +18,12 @@ def test_docker_compose_defines_cal_edl_and_agent_services() -> None:
     assert "--transport" in services["agent"]["command"]
     assert "http://cal:8100" in services["agent"]["command"]
     assert "http://edl:8200" in services["agent"]["command"]
-    assert services["agent"]["environment"]["AGENT_SYNTHESIS_PROVIDER"] == "http"
     assert (
-        services["agent"]["environment"]["AGENT_SYNTHESIS_BASE_URL"]
+        services["agent"]["environment"]["DULLAHAN_INFERENCE_PROVIDER"]
+        == "${DULLAHAN_INFERENCE_PROVIDER:-http}"
+    )
+    assert (
+        services["agent"]["environment"]["DULLAHAN_LOCAL_INFERENCE_BASE_URL"]
         == "http://host.docker.internal:30000/v1"
     )
 

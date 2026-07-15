@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from urllib.error import HTTPError, URLError
-from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 
+from dullahan_shared.inference import InferenceHttpError, OpenAICompatibleTextClient
 from dullahan_shared.schemas.expert import ExpertResponse
 from dullahan_shared.schemas.query import QueryEnvelope
 
@@ -42,58 +41,46 @@ class OpenAICompatibleSynthesisProvider(SynthesisProvider):
         base_url: str,
         model: str,
         timeout_seconds: float = 30.0,
+        api_mode: str = "completions",
+        api_key: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.api_mode = api_mode
+        self.api_key = api_key
 
     def synthesize(self, request: SynthesisRequest) -> SynthesisResult:
-        http_request = UrlRequest(
-            url=f"{self.base_url}/completions",
-            data=json.dumps(
-                {
-                    "model": self.model,
-                    "prompt": request.prompt,
-                    "max_tokens": request.max_tokens,
-                    "temperature": 0,
-                }
-            ).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            method="POST",
-        )
         try:
-            with urlopen(http_request, timeout=self.timeout_seconds) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise SynthesisProviderError(
-                f"synthesis provider failed with HTTP {exc.code}: {detail}"
-            ) from exc
-        except URLError as exc:
-            raise SynthesisProviderError(
-                f"synthesis provider request failed: {exc.reason}"
-            ) from exc
+            result = OpenAICompatibleTextClient(
+                base_url=self.base_url,
+                api_mode=self.api_mode,
+                api_key=self.api_key,
+                timeout_seconds=self.timeout_seconds,
+                opener=urlopen,
+            ).generate(
+                model=self.model,
+                prompt=request.prompt,
+                max_tokens=request.max_tokens,
+            )
+        except InferenceHttpError as exc:
+            raise SynthesisProviderError(f"synthesis provider failed: {exc}") from exc
 
-        choices = payload.get("choices") or []
-        text = str(choices[0].get("text", "")).strip() if choices else ""
-        usage = payload.get("usage") or {}
-        prompt_tokens = usage.get("prompt_tokens")
-        completion_tokens = usage.get("completion_tokens")
-        if not text:
+        if not result.text:
             raise SynthesisProviderError("synthesis provider returned no final answer")
-        if not isinstance(prompt_tokens, int) or prompt_tokens < 0:
+        if result.input_tokens is None or result.input_tokens < 0:
             raise SynthesisProviderError(
                 "synthesis provider response contained no native prompt token usage"
             )
-        if not isinstance(completion_tokens, int) or completion_tokens < 0:
+        if result.output_tokens is None or result.output_tokens < 0:
             raise SynthesisProviderError(
                 "synthesis provider response contained no native completion token usage"
             )
         return SynthesisResult(
-            text=text,
+            text=result.text,
             provider="openai-compatible-synthesis",
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
+            prompt_tokens=result.input_tokens,
+            completion_tokens=result.output_tokens,
         )
 
 
